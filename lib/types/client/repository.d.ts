@@ -1,0 +1,37 @@
+import type { BranchId, GraphState, ImportedTurn, PrepareBranchInput, TurnNodeId } from './types.ts';
+interface BrowserStorage {
+    getItem(key: string): string | null;
+    setItem(key: string, value: string): void;
+}
+/** Persistent observable owning the browser-side conversation DAG. */
+export declare class GraphRepository {
+    private readonly storage?;
+    private state;
+    private readonly listeners;
+    /** @param storage - browser storage; omitted keeps an in-memory repository. */
+    constructor(storage?: BrowserStorage | undefined);
+    /** Return the stable snapshot until the next mutation. */
+    getSnapshot: () => GraphState;
+    /** Subscribe to graph mutations. */
+    subscribe: (listener: () => void) => (() => void);
+    private commit;
+    /** Import completed turns from the currently viewed DSH session. */
+    syncSession(sessionId: string, turns: readonly ImportedTurn[]): void;
+    /** Record an auto-created child session before its first merged request completes. */
+    prepareBranch(input: PrepareBranchInput): void;
+    /** Remove a pending merge after a rejected prompt. */
+    abortPending(sessionId: string): void;
+    /** Toggle one node in the context tray; additions restore creation-time order. */
+    toggleContext(nodeId: TurnNodeId): void;
+    /** Remove all nodes from the next-request tray. */
+    clearContext(): void;
+    /** Move one selected node before another selected node. */
+    moveContext(nodeId: TurnNodeId, beforeId: TurnNodeId): void;
+    /** Move one selected node to the end of the tray. */
+    moveContextToEnd(nodeId: TurnNodeId): void;
+    /** Change only the preview selection. */
+    preview(nodeId: TurnNodeId): void;
+    /** Rename a branch in the graph ledger. */
+    renameBranch(branchId: BranchId, name: string): void;
+}
+export {};
