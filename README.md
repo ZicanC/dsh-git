@@ -1,5 +1,7 @@
 # dsh-git
 
+**English** · [中文](./README.zh-CN.md)
+
 `dsh-git` is an installable DeepSeek Harness Web plugin that turns linear chat history into a Git-style conversation graph. A completed Prompt + Answer turn is one `PA` node. Ordinary continuations create one-parent nodes; selecting turns from parallel lines and asking a new question creates a multi-parent merge node on a new branch.
 
 The UI follows the Chinese or English language selected in DSH settings.
