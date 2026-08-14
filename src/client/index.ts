@@ -12,9 +12,11 @@ import {
 } from '../protocol.ts'
 import type { TurnNodeId } from './types.ts'
 import type {} from '../connection-contract.ts'
+import type {} from '@deepseek-ai/dsh-client-locale/client'
+import { installLocaleSource, localized } from './i18n.ts'
 
 /** Required client services: the conversation view slot and session runtime. */
-export const inject = ['connection', 'slots', 'sessions', 'workspaces']
+export const inject = ['connection', 'slots', 'sessions', 'workspaces', 'locale']
 
 function installStyles(): () => void {
   const existing = document.querySelector<HTMLStyleElement>('style[data-plugin="dsh-git"]')
@@ -49,18 +51,20 @@ export function apply(ctx: Context): void {
     ctx.workspaces,
     typeof localStorage === 'undefined' ? undefined : localStorage,
   )
+  ctx.effect(() => installLocaleSource(ctx.locale), 'dsh-git: locale source')
   ctx.effect(installStyles, 'dsh-git: stylesheet')
   ctx.effect(() => installProjectBridge({
     connection: ctx.connection,
     sessions,
     workspaces: ctx.workspaces,
+    locale: ctx.locale,
     repositoryForWorkspace: workspaceId => repositories.forWorkspace(workspaceId),
   }), 'dsh-git: project graph compatibility bridge')
   ctx.slots.inject('conversation.view', () => ctx.slots.register({
     name: 'conversation.view',
     id: 'dsh-git',
     order: 20,
-    label: '分支',
+    label: () => localized('分支', 'Branches'),
     inject: (sessionId: SessionId): GraphViewInjected => {
       const repository = repositories.forSession(sessionId)
       const sessionParents = (): Record<string, string> => Object.fromEntries(
@@ -87,13 +91,13 @@ export function apply(ctx: Context): void {
         ask: async (question: string, manifest: readonly TurnNodeId[]): Promise<void> => {
           const state = repository.getSnapshot()
           const selected = manifest.flatMap(nodeId => state.nodes[nodeId] === undefined ? [] : [state.nodes[nodeId]!])
-          if (selected.length === 0) throw new Error('请先选择至少一个 PA 节点。')
+          if (selected.length === 0) throw new Error(localized('请先选择至少一个 PA 节点。', 'Select at least one PA node first.'))
           const base = [...selected].sort((left, right) => left.createdAt - right.createdAt)[0]!
           const primaryParentId = state.headNodeId !== null && manifest.includes(state.headNodeId)
             ? state.headNodeId
             : manifest.at(-1) ?? null
           const source = sessions.binding(base.sessionId as SessionId)?.session
-          if (source === undefined) throw new Error('无法访问用于创建 merge branch 的来源 session。')
+          if (source === undefined) throw new Error(localized('无法访问用于创建 merge branch 的来源 session。', 'Cannot access the source Session used to create the merge branch.'))
           const childSessionId = createSessionId()
           repositories.pinSession(childSessionId, repository)
           const payload = encodeCreateMergedSessionPayload({
@@ -105,8 +109,8 @@ export function apply(ctx: Context): void {
             })),
           })
           const command = await source.command(`/${CREATE_MERGED_SESSION_COMMAND} ${payload}`)
-          if (!command.ok) throw new Error(`创建 merge branch 失败：${command.error.message}`)
-          if (!command.value.matched) throw new Error('Host 未加载 dsh-git 历史合成命令，请重启 dsh。')
+          if (!command.ok) throw new Error(localized(`创建 merge branch 失败：${command.error.message}`, `Failed to create merge branch: ${command.error.message}`))
+          if (!command.value.matched) throw new Error(localized('Host 未加载 dsh-git 历史合成命令，请重启 dsh。', 'The Host did not load the dsh-git history composition command. Restart dsh.'))
           repository.prepareBranch({
             sourceSessionId: base.sessionId,
             childSessionId,
@@ -120,13 +124,13 @@ export function apply(ctx: Context): void {
           const binding = await waitForSession(sessions, childSessionId)
           if (binding === undefined) {
             repository.abortPending(childSessionId)
-            throw new Error('新 branch 已在 Host 创建，但浏览器没有收到对应 session。')
+            throw new Error(localized('新 branch 已在 Host 创建，但浏览器没有收到对应 session。', 'The new branch was created on the Host, but the browser did not receive its Session.'))
           }
           sessions.open(childSessionId)
           const result = await binding.session.prompt([{ type: 'text', text: question.trim() }], 'queue')
           if (!result.ok) {
             repository.abortPending(childSessionId)
-            throw new Error(`新 branch 提问失败：${result.error.message}`)
+            throw new Error(localized(`新 branch 提问失败：${result.error.message}`, `Failed to ask on the new branch: ${result.error.message}`))
           }
         },
       }

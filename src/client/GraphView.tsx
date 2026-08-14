@@ -7,6 +7,7 @@ import { extractCompletedTurns } from './extract.ts'
 import { ContextTray } from './ContextTray.tsx'
 import { GraphCanvas } from './GraphCanvas.tsx'
 import { nodeHash, nodeLabelMap } from './labels.ts'
+import { localized, useLocale, type Locale } from './i18n.ts'
 import type { BranchId, GraphState, ImportedTurn, TurnNodeId } from './types.ts'
 
 /** Browser callbacks and observable supplied from the plugin apply closure. */
@@ -23,13 +24,14 @@ export interface GraphViewInjected {
 }
 
 function BranchControls({
-  branchId, name, current, onCheckout, onRename,
+  branchId, name, current, onCheckout, onRename, locale,
 }: {
   readonly branchId: BranchId
   readonly name: string
   readonly current: boolean
   readonly onCheckout: () => void
   readonly onRename: (branchId: BranchId, name: string) => void
+  readonly locale: Locale
 }) {
   const [draft, setDraft] = useState(name)
   const commit = (): void => {
@@ -40,7 +42,7 @@ function BranchControls({
   return <div className="dsh-git-inspector-actions">
     <input
       className="dsh-git-branch-name"
-      aria-label="Branch 名称"
+      aria-label={localized('Branch 名称', 'Branch name', locale)}
       value={draft}
       onChange={event => setDraft(event.target.value)}
       onBlur={commit}
@@ -50,7 +52,7 @@ function BranchControls({
       }}
     />
     <button className="dsh-git-button" type="button" disabled={current} onClick={onCheckout}>
-      {current ? '当前 HEAD' : '切换到此分支'}
+      {current ? localized('当前 HEAD', 'Current HEAD', locale) : localized('切换到此分支', 'Switch to this branch', locale)}
     </button>
   </div>
 }
@@ -60,6 +62,7 @@ export function GraphView({
   useSession, useGraph, syncTurns, toggleContext, moveContext, moveContextToEnd,
   clearContext, checkout, renameBranch, ask,
 }: ConvViewProps & InjectFace<GraphViewInjected>) {
+  const locale = useLocale()
   const snapshot = useSession(value => value)
   const state = useGraph((value: GraphState) => value)
   const turns = useMemo(() => extractCompletedTurns(snapshot), [snapshot])
@@ -91,17 +94,17 @@ export function GraphView({
       <section className="dsh-git-panel" aria-label="Conversation Graph">
         <header className="dsh-git-heading">
           <span>Conversation Graph</span>
-          <span className="dsh-git-muted">点击节点查看 Context · 虚线为 merge</span>
+          <span className="dsh-git-muted">{localized('点击节点查看 Context · 虚线为 merge', 'Click a node to view Context · dashed lines are merges', locale)}</span>
         </header>
         <GraphCanvas state={state} previewNodeId={inspectedNodeId} onPreview={setInspectedNodeId} />
       </section>
-      {inspected === undefined ? null : <aside className="dsh-git-panel" aria-label="节点 Context">
+      {inspected === undefined ? null : <aside className="dsh-git-panel" aria-label={localized('节点 Context', 'Node Context', locale)}>
         <header className="dsh-git-heading">
           <span>{labels.get(inspected.id) ?? 'PA'} Context</span>
-          <button className="dsh-git-close" type="button" aria-label="关闭节点 Context" onClick={() => setInspectedNodeId(null)}>×</button>
+          <button className="dsh-git-close" type="button" aria-label={localized('关闭节点 Context', 'Close Node Context', locale)} onClick={() => setInspectedNodeId(null)}>×</button>
         </header>
           <div className="dsh-git-inspector">
-            <h3>{inspected.prompt || '（无文字问题）'}</h3>
+            <h3>{inspected.prompt || localized('（无文字问题）', '(No text prompt)', locale)}</h3>
             <div className="dsh-git-node-hash">
               <span>HASH</span>
               <code>{nodeHash(inspected.id)}</code>
@@ -111,34 +114,35 @@ export function GraphView({
               branchId={inspectedBranch.id}
               name={inspectedBranch.name}
               current={inspected.id === state.headNodeId}
+              locale={locale}
               onCheckout={() => checkout(inspected.id)}
               onRename={renameBranch}
             />}
             <button className="dsh-git-button" type="button" onClick={() => toggleContext(inspected.id)}>
-              {state.contextManifest.includes(inspected.id) ? '从 Context Tray 移除' : '加入 Context Tray'}
+              {state.contextManifest.includes(inspected.id) ? localized('从 Context Tray 移除', 'Remove from Context Tray', locale) : localized('加入 Context Tray', 'Add to Context Tray', locale)}
             </button>
-            <section className="dsh-git-context-history" aria-label="回答时使用的 Context">
-              <span className="dsh-git-message-label">回答时使用的 CONTEXT</span>
+            <section className="dsh-git-context-history" aria-label={localized('回答时使用的 Context', 'Context used for this answer', locale)}>
+              <span className="dsh-git-message-label">{localized('回答时使用的 CONTEXT', 'CONTEXT USED FOR THIS ANSWER', locale)}</span>
               {inspected.contextManifest.length === 0
-                ? <div className="dsh-git-muted">该节点没有前置 Context。</div>
+                ? <div className="dsh-git-muted">{localized('该节点没有前置 Context。', 'This node has no preceding Context.', locale)}</div>
                 : <ol>{inspected.contextManifest.map(nodeId => {
                   const contextNode = state.nodes[nodeId]
                   if (contextNode === undefined) return null
                   return <li key={nodeId}>
                     <strong>{labels.get(nodeId) ?? 'PA'}</strong>
-                    <span>{contextNode.prompt || '（无文字问题）'}</span>
+                    <span>{contextNode.prompt || localized('（无文字问题）', '(No text prompt)', locale)}</span>
                   </li>
                 })}</ol>}
             </section>
             <div className="dsh-git-message">
               <span className="dsh-git-message-label">PROMPT</span>
-              <MarkdownText text={inspected.prompt || '（无文字问题）'} />
+              <MarkdownText text={inspected.prompt || localized('（无文字问题）', '(No text prompt)', locale)} />
             </div>
             <div className="dsh-git-message">
               <span className="dsh-git-message-label">ANSWER</span>
-              <MarkdownText text={inspected.answer || '（没有文字回答）'} />
+              <MarkdownText text={inspected.answer || localized('（没有文字回答）', '(No text answer)', locale)} />
             </div>
-            <div className="dsh-git-muted">parents: {inspected.parentIds.length || 0} · context: {inspected.contextManifest.length || 0}</div>
+            <div className="dsh-git-muted">{localized('父节点', 'parents', locale)}: {inspected.parentIds.length || 0} · context: {inspected.contextManifest.length || 0}</div>
           </div>
       </aside>}
     </div>

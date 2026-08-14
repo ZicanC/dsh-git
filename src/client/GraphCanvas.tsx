@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { orderedNodes, primaryPath } from './graph.ts'
 import { nodeLabelMap } from './labels.ts'
+import { localized, useLocale } from './i18n.ts'
 import type { GraphState, TurnNodeId } from './types.ts'
 
 const NODE_WIDTH = 72
@@ -106,6 +107,7 @@ function connector(parent: TreePosition, child: TreePosition): string {
 export function GraphCanvas({
   state, previewNodeId, onPreview, labels: suppliedLabels, nodeColors, fit = true,
 }: GraphCanvasProps) {
+  const locale = useLocale()
   const viewportRef = useRef<HTMLDivElement>(null)
   const [viewport, setViewport] = useState({ width: 0, height: 0 })
   const layout = useMemo(() => layoutTree(state), [state])
@@ -127,7 +129,7 @@ export function GraphCanvas({
   }, [])
 
   if (layout.positions.length === 0) {
-    return <div className="dsh-git-empty">完成第一轮对话后，这里会出现第一条 branch。</div>
+    return <div className="dsh-git-empty">{localized('完成第一轮对话后，这里会出现第一条 branch。', 'The first branch will appear here after you complete a conversation turn.', locale)}</div>
   }
 
   const availableWidth = Math.max(0, viewport.width - 24)
@@ -178,8 +180,8 @@ export function GraphCanvas({
               : `var(--dsh-git-session-${nodeColors.get(node.id) ?? 0})`,
           } as CSSProperties}
           key={node.id}
-          title={`${label}: ${node.prompt || '（无文字问题）'}`}
-          aria-label={`查看 ${label} context`}
+          title={`${label}: ${node.prompt || localized('（无文字问题）', '(No text prompt)', locale)}`}
+          aria-label={localized(`查看 ${label} context`, `View ${label} context`, locale)}
           aria-current={isHead ? 'true' : undefined}
           onClick={() => onPreview(node.id)}
         >

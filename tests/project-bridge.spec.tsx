@@ -41,6 +41,7 @@ describe('project sidebar compatibility bridge', () => {
       sessions: { list: sessions, open: vi.fn() } as never,
       workspaces: { list: workspaces } as never,
       repositoryForWorkspace: () => new GraphRepository(),
+      locale: { getSnapshot: () => ({ active: 'zh', revision: 0 }), subscribe: () => () => {} },
     })
 
     const button = screen.getByRole('button', { name: '打开“Project”的 Conversation Graph' })

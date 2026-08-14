@@ -6,6 +6,8 @@ import type {
 import type { ProjectConnection } from '../connection-contract.ts'
 import type { GraphRepository } from './repository.ts'
 import { ProjectGraphPage } from './ProjectGraphPage.tsx'
+import { localized } from './i18n.ts'
+import type { LocaleSource } from './i18n.ts'
 import {
   PROJECT_GRAPH_RPC_CHANNEL,
   PROJECT_GRAPH_RPC_ENDPOINT,
@@ -20,6 +22,7 @@ export interface ProjectBridgeServices {
   readonly sessions: ISessions
   readonly workspaces: IWorkspaces
   readonly repositoryForWorkspace: (workspaceId: string) => GraphRepository
+  readonly locale: LocaleSource
 }
 
 interface ActivePage {
@@ -82,7 +85,7 @@ export function installProjectBridge(services: ProjectBridgeServices): () => voi
       )
       if (!result.ok) throw new Error(result.error.message)
       const response = decodeProjectGraphResponse(result.value)
-      if (response.workspaceId !== workspace.workspaceId) throw new Error('Host 返回了错误的 Workspace graph。')
+      if (response.workspaceId !== workspace.workspaceId) throw new Error(localized('Host 返回了错误的 Workspace graph。', 'The Host returned a graph for the wrong Workspace.'))
       return response
     }
     root.render(<ProjectGraphPage
@@ -109,7 +112,10 @@ export function installProjectBridge(services: ProjectBridgeServices): () => voi
       if (row === undefined) continue
       used.add(row)
       const existing = row.querySelector<HTMLElement>(`[${BUTTON_ATTRIBUTE}]`)
-      if (existing?.getAttribute(BUTTON_ATTRIBUTE) === workspace.workspaceId) continue
+      if (existing !== null && existing.getAttribute(BUTTON_ATTRIBUTE) === workspace.workspaceId) {
+        existing.setAttribute('aria-label', localized(`打开“${workspace.title}”的 Conversation Graph`, `Open the Conversation Graph for “${workspace.title}”`))
+        continue
+      }
       existing?.remove()
       const buttons = row.querySelectorAll<HTMLButtonElement>('button')
       const anchor = buttons.item(buttons.length - 1)
@@ -118,7 +124,7 @@ export function installProjectBridge(services: ProjectBridgeServices): () => voi
       button.type = 'button'
       button.className = anchor.className
       button.setAttribute(BUTTON_ATTRIBUTE, workspace.workspaceId)
-      button.setAttribute('aria-label', `打开“${workspace.title}”的 Conversation Graph`)
+      button.setAttribute('aria-label', localized(`打开“${workspace.title}”的 Conversation Graph`, `Open the Conversation Graph for “${workspace.title}”`))
       button.title = 'Conversation Graph'
       button.innerHTML = graphIcon()
       button.addEventListener('click', (event) => {
@@ -139,11 +145,13 @@ export function installProjectBridge(services: ProjectBridgeServices): () => voi
   const observer = new MutationObserver(queueScan)
   observer.observe(document.body, { childList: true, subtree: true })
   const unsubscribeWorkspaces = services.workspaces.list.subscribe(queueScan)
+  const unsubscribeLocale = services.locale.subscribe(queueScan)
   scan()
 
   return () => {
     observer.disconnect()
     unsubscribeWorkspaces()
+    unsubscribeLocale()
     close()
     document.querySelectorAll(`[${BUTTON_ATTRIBUTE}]`).forEach(button => { button.remove() })
   }

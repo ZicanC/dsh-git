@@ -20,6 +20,9 @@ importers:
       '@deepseek-ai/dsh-client-connection':
         specifier: link:../deepseek-harness/packages/client/connection
         version: link:../deepseek-harness/packages/client/connection
+      '@deepseek-ai/dsh-client-locale':
+        specifier: link:../deepseek-harness/packages/client/locale
+        version: link:../deepseek-harness/packages/client/locale
       '@deepseek-ai/dsh-client-runtime':
         specifier: link:../deepseek-harness/packages/client/runtime
         version: link:../deepseek-harness/packages/client/runtime

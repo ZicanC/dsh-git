@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ContextTray } from '../src/client/ContextTray.tsx'
 import { GraphCanvas } from '../src/client/GraphCanvas.tsx'
 import { GraphView } from '../src/client/GraphView.tsx'
 import { graph, node } from './fixtures.ts'
+import { installLocaleSource } from '../src/client/i18n.ts'
 
 afterEach(cleanup)
 
@@ -63,6 +64,34 @@ describe('graph UI', () => {
     expect(screen.getByText('回答时使用的 CONTEXT')).toBeTruthy()
     expect(within(screen.getByLabelText('回答时使用的 Context')).getByText('Question one')).toBeTruthy()
     expect(screen.getAllByText('Question two')).toHaveLength(2)
+  })
+
+  it('follows a DSH locale change without rendering its own switch', () => {
+    let localeSnapshot = { active: 'zh', revision: 0 }
+    const listeners = new Set<() => void>()
+    const uninstall = installLocaleSource({
+      getSnapshot: () => localeSnapshot,
+      subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener) } },
+    })
+    const snapshot = { chat: { timeline: { turnOrder: [], turns: new Map() } }, nodes: [] }
+    render(<GraphView {...({
+      useSession: (selector: (value: unknown) => unknown) => selector(snapshot),
+      useGraph: (selector: (value: unknown) => unknown) => selector(state),
+      syncTurns: vi.fn(), toggleContext: vi.fn(), moveContext: vi.fn(),
+      moveContextToEnd: vi.fn(), clearContext: vi.fn(), checkout: vi.fn(),
+      renameBranch: vi.fn(), ask: vi.fn(),
+    } as never)} />)
+    expect(screen.queryByLabelText('界面语言')).toBeNull()
+    localeSnapshot = { active: 'en', revision: 1 }
+    act(() => { for (const listener of listeners) listener() })
+    expect(screen.getByText('Click a node to view Context · dashed lines are merges')).toBeTruthy()
+    expect(screen.getByPlaceholderText(/Enter your next question/)).toBeTruthy()
+    uninstall()
+    const chineseSnapshot = Object.freeze({ active: 'zh', revision: 2 })
+    installLocaleSource({
+      getSnapshot: () => chineseSnapshot,
+      subscribe: () => () => {},
+    })
   })
 
   it('renders prompt and answer Markdown in the context panel', () => {
