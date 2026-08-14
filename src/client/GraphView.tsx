@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace } from '@deepseek-ai/dsh-client-ui-slots'
 import type { GraphRepository } from './repository.ts'
 import { extractCompletedTurns } from './extract.ts'
 import { ContextTray } from './ContextTray.tsx'
 import { GraphCanvas } from './GraphCanvas.tsx'
+import { nodeHash, nodeLabelMap } from './labels.ts'
 import type { BranchId, GraphState, ImportedTurn, TurnNodeId } from './types.ts'
 
 /** Browser callbacks and observable supplied from the plugin apply closure. */
@@ -70,11 +72,7 @@ export function GraphView({
 
   const inspected = inspectedNodeId === null ? undefined : state.nodes[inspectedNodeId]
   const inspectedBranch = inspected === undefined ? undefined : state.branches[inspected.branchId]
-  const labels = useMemo(() => new Map(
-    Object.values(state.nodes)
-      .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id))
-      .map((node, index) => [node.id, `PA${index + 1}`]),
-  ), [state.nodes])
+  const labels = useMemo(() => nodeLabelMap(state), [state])
   const submit = async (question: string): Promise<void> => {
     setBusy(true)
     setError(null)
@@ -102,8 +100,12 @@ export function GraphView({
           <span>{labels.get(inspected.id) ?? 'PA'} Context</span>
           <button className="dsh-git-close" type="button" aria-label="关闭节点 Context" onClick={() => setInspectedNodeId(null)}>×</button>
         </header>
-        <div className="dsh-git-inspector">
+          <div className="dsh-git-inspector">
             <h3>{inspected.prompt || '（无文字问题）'}</h3>
+            <div className="dsh-git-node-hash">
+              <span>HASH</span>
+              <code>{nodeHash(inspected.id)}</code>
+            </div>
             {inspectedBranch === undefined ? null : <BranchControls
               key={inspectedBranch.id}
               branchId={inspectedBranch.id}
@@ -128,8 +130,14 @@ export function GraphView({
                   </li>
                 })}</ol>}
             </section>
-            <div className="dsh-git-message"><span className="dsh-git-message-label">PROMPT</span>{inspected.prompt}</div>
-            <div className="dsh-git-message"><span className="dsh-git-message-label">ANSWER</span>{inspected.answer || '（没有文字回答）'}</div>
+            <div className="dsh-git-message">
+              <span className="dsh-git-message-label">PROMPT</span>
+              <MarkdownText text={inspected.prompt || '（无文字问题）'} />
+            </div>
+            <div className="dsh-git-message">
+              <span className="dsh-git-message-label">ANSWER</span>
+              <MarkdownText text={inspected.answer || '（没有文字回答）'} />
+            </div>
             <div className="dsh-git-muted">parents: {inspected.parentIds.length || 0} · context: {inspected.contextManifest.length || 0}</div>
           </div>
       </aside>}

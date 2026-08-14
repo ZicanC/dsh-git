@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { estimateTokens, missingDirectDependencies } from './graph.ts'
+import { nodeLabelMap } from './labels.ts'
 import type { GraphState, TurnNodeId } from './types.ts'
 
 /** Presentation-only props for the ordered next-request context tray. */
@@ -14,10 +15,6 @@ export interface ContextTrayProps {
   readonly onAsk: (question: string) => Promise<void>
 }
 
-function shortId(id: string): string {
-  return id.startsWith('pa-') ? `PA-${id.slice(-5)}` : id.slice(-8)
-}
-
 /** Draggable ordered context selection and branch-creating prompt composer. */
 export function ContextTray({
   state, busy, error, onMove, onMoveEnd, onRemove, onClear, onAsk,
@@ -25,6 +22,7 @@ export function ContextTray({
   const [question, setQuestion] = useState('')
   const [dragging, setDragging] = useState<TurnNodeId | null>(null)
   const missing = missingDirectDependencies(state, state.contextManifest)
+  const labels = nodeLabelMap(state)
   const canAsk = !busy && question.trim() !== '' && state.contextManifest.length > 0
 
   const submit = async (): Promise<void> => {
@@ -51,6 +49,7 @@ export function ContextTray({
         : state.contextManifest.map((nodeId) => {
           const node = state.nodes[nodeId]
           if (node === undefined) return null
+          const label = labels.get(nodeId) ?? 'PA'
           return <span
             className="dsh-git-chip"
             draggable
@@ -69,13 +68,13 @@ export function ContextTray({
             }}
           >
             <span aria-hidden="true">⠿</span>
-            {shortId(nodeId)}
-            <button type="button" aria-label={`移除 ${shortId(nodeId)}`} onClick={() => onRemove(nodeId)}>×</button>
+            {label}
+            <button type="button" aria-label={`移除 ${label}`} onClick={() => onRemove(nodeId)}>×</button>
           </span>
         })}
     </div>
     {missing.length > 0
-      ? <div className="dsh-git-warning">自由选择模式：{missing.map(shortId).join('、')} 未加入；模型只接收 Tray 中列出的 PA。</div>
+      ? <div className="dsh-git-warning">自由选择模式：{missing.map(id => labels.get(id) ?? 'PA').join('、')} 未加入；模型只接收 Tray 中列出的 PA。</div>
       : null}
     <textarea
       className="dsh-git-question"

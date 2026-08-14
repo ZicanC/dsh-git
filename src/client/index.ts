@@ -3,16 +3,18 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ISessions, SessionBinding, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { GraphView, type GraphViewInjected } from './GraphView.tsx'
-import { GraphRepository } from './repository.ts'
+import { installProjectBridge } from './project-bridge.tsx'
+import { WorkspaceGraphRepositories } from './workspace-repositories.ts'
 import { STYLES } from './styles.ts'
 import {
   CREATE_MERGED_SESSION_COMMAND,
   encodeCreateMergedSessionPayload,
 } from '../protocol.ts'
 import type { TurnNodeId } from './types.ts'
+import type {} from '../connection-contract.ts'
 
 /** Required client services: the conversation view slot and session runtime. */
-export const inject = ['slots', 'sessions']
+export const inject = ['connection', 'slots', 'sessions', 'workspaces']
 
 function installStyles(): () => void {
   const existing = document.querySelector<HTMLStyleElement>('style[data-plugin="dsh-git"]')
@@ -43,69 +45,82 @@ async function waitForSession(sessions: ISessions, sessionId: SessionId): Promis
 export function apply(ctx: Context): void {
   // Host and browser packages both augment Cordis' `sessions` name; this bundle runs on the browser face.
   const sessions = ctx.sessions as unknown as ISessions
-  const repository = new GraphRepository(typeof localStorage === 'undefined' ? undefined : localStorage)
+  const repositories = new WorkspaceGraphRepositories(
+    ctx.workspaces,
+    typeof localStorage === 'undefined' ? undefined : localStorage,
+  )
   ctx.effect(installStyles, 'dsh-git: stylesheet')
+  ctx.effect(() => installProjectBridge({
+    connection: ctx.connection,
+    sessions,
+    workspaces: ctx.workspaces,
+    repositoryForWorkspace: workspaceId => repositories.forWorkspace(workspaceId),
+  }), 'dsh-git: project graph compatibility bridge')
   ctx.slots.inject('conversation.view', () => ctx.slots.register({
     name: 'conversation.view',
     id: 'dsh-git',
     order: 20,
     label: '分支',
-    inject: (sessionId: SessionId): GraphViewInjected => ({
-      hooks: { graph: repository },
-      syncTurns: turns => repository.syncSession(sessionId, turns),
-      toggleContext: nodeId => repository.toggleContext(nodeId),
-      moveContext: (nodeId, beforeId) => repository.moveContext(nodeId, beforeId),
-      moveContextToEnd: nodeId => repository.moveContextToEnd(nodeId),
-      clearContext: () => repository.clearContext(),
-      checkout: (nodeId) => {
-        const node = repository.getSnapshot().nodes[nodeId]
-        if (node !== undefined) sessions.open(node.sessionId as SessionId)
-      },
-      renameBranch: (branchId, branchName) => repository.renameBranch(branchId, branchName),
-      ask: async (question: string, manifest: readonly TurnNodeId[]): Promise<void> => {
-        const state = repository.getSnapshot()
-        const selected = manifest.flatMap(nodeId => state.nodes[nodeId] === undefined ? [] : [state.nodes[nodeId]!])
-        if (selected.length === 0) throw new Error('请先选择至少一个 PA 节点。')
-        const base = [...selected].sort((left, right) => left.createdAt - right.createdAt)[0]!
-        const primaryParentId = state.headNodeId !== null && manifest.includes(state.headNodeId)
-          ? state.headNodeId
-          : manifest.at(-1) ?? null
-        const source = sessions.binding(base.sessionId as SessionId)?.session
-        if (source === undefined) throw new Error('无法访问用于创建 merge branch 的来源 session。')
-        const childSessionId = createSessionId()
-        const payload = encodeCreateMergedSessionPayload({
-          targetSessionId: childSessionId,
-          sources: selected.map(node => ({
-            sourceSessionId: node.sessionId,
-            sourceTurn: node.turn,
-            sourceBoundarySeq: node.boundarySeq,
-          })),
-        })
-        const command = await source.command(`/${CREATE_MERGED_SESSION_COMMAND} ${payload}`)
-        if (!command.ok) throw new Error(`创建 merge branch 失败：${command.error.message}`)
-        if (!command.value.matched) throw new Error('Host 未加载 dsh-git 历史合成命令，请重启 dsh。')
-        repository.prepareBranch({
-          sourceSessionId: base.sessionId,
-          childSessionId,
-          baseNodeId: base.id,
-          importedNodeIds: manifest,
-          parentIds: manifest,
-          primaryParentId,
-          contextManifest: manifest,
-          prompt: question.trim(),
-        })
-        const binding = await waitForSession(sessions, childSessionId)
-        if (binding === undefined) {
-          repository.abortPending(childSessionId)
-          throw new Error('新 branch 已在 Host 创建，但浏览器没有收到对应 session。')
-        }
-        sessions.open(childSessionId)
-        const result = await binding.session.prompt([{ type: 'text', text: question.trim() }], 'queue')
-        if (!result.ok) {
-          repository.abortPending(childSessionId)
-          throw new Error(`新 branch 提问失败：${result.error.message}`)
-        }
-      },
-    }),
+    inject: (sessionId: SessionId): GraphViewInjected => {
+      const repository = repositories.forSession(sessionId)
+      return {
+        hooks: { graph: repository },
+        syncTurns: turns => repository.syncSession(sessionId, turns),
+        toggleContext: nodeId => repository.toggleContext(nodeId),
+        moveContext: (nodeId, beforeId) => repository.moveContext(nodeId, beforeId),
+        moveContextToEnd: nodeId => repository.moveContextToEnd(nodeId),
+        clearContext: () => repository.clearContext(),
+        checkout: (nodeId) => {
+          const node = repository.getSnapshot().nodes[nodeId]
+          if (node !== undefined) sessions.open(node.sessionId as SessionId)
+        },
+        renameBranch: (branchId, branchName) => repository.renameBranch(branchId, branchName),
+        ask: async (question: string, manifest: readonly TurnNodeId[]): Promise<void> => {
+          const state = repository.getSnapshot()
+          const selected = manifest.flatMap(nodeId => state.nodes[nodeId] === undefined ? [] : [state.nodes[nodeId]!])
+          if (selected.length === 0) throw new Error('请先选择至少一个 PA 节点。')
+          const base = [...selected].sort((left, right) => left.createdAt - right.createdAt)[0]!
+          const primaryParentId = state.headNodeId !== null && manifest.includes(state.headNodeId)
+            ? state.headNodeId
+            : manifest.at(-1) ?? null
+          const source = sessions.binding(base.sessionId as SessionId)?.session
+          if (source === undefined) throw new Error('无法访问用于创建 merge branch 的来源 session。')
+          const childSessionId = createSessionId()
+          repositories.pinSession(childSessionId, repository)
+          const payload = encodeCreateMergedSessionPayload({
+            targetSessionId: childSessionId,
+            sources: selected.map(node => ({
+              sourceSessionId: node.sessionId,
+              sourceTurn: node.turn,
+              sourceBoundarySeq: node.boundarySeq,
+            })),
+          })
+          const command = await source.command(`/${CREATE_MERGED_SESSION_COMMAND} ${payload}`)
+          if (!command.ok) throw new Error(`创建 merge branch 失败：${command.error.message}`)
+          if (!command.value.matched) throw new Error('Host 未加载 dsh-git 历史合成命令，请重启 dsh。')
+          repository.prepareBranch({
+            sourceSessionId: base.sessionId,
+            childSessionId,
+            baseNodeId: base.id,
+            importedNodeIds: manifest,
+            parentIds: manifest,
+            primaryParentId,
+            contextManifest: manifest,
+            prompt: question.trim(),
+          })
+          const binding = await waitForSession(sessions, childSessionId)
+          if (binding === undefined) {
+            repository.abortPending(childSessionId)
+            throw new Error('新 branch 已在 Host 创建，但浏览器没有收到对应 session。')
+          }
+          sessions.open(childSessionId)
+          const result = await binding.session.prompt([{ type: 'text', text: question.trim() }], 'queue')
+          if (!result.ok) {
+            repository.abortPending(childSessionId)
+            throw new Error(`新 branch 提问失败：${result.error.message}`)
+          }
+        },
+      }
+    },
   }, GraphView))
 }

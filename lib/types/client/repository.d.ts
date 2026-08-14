@@ -8,8 +8,13 @@ export declare class GraphRepository {
     private readonly storage?;
     private state;
     private readonly listeners;
-    /** @param storage - browser storage; omitted keeps an in-memory repository. */
-    constructor(storage?: BrowserStorage | undefined);
+    private readonly storageKey;
+    /**
+     * @param storage - browser storage; omitted keeps an in-memory repository.
+     * @param scopeId - one Workspace-folder id; omitted preserves the standalone repository API.
+     * @param fallbackState - one-time seed used only when the scoped key does not exist yet.
+     */
+    constructor(storage?: BrowserStorage | undefined, scopeId?: string, fallbackState?: GraphState);
     /** Return the stable snapshot until the next mutation. */
     getSnapshot: () => GraphState;
     /** Subscribe to graph mutations. */

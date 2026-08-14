@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { orderedNodes, primaryPath } from './graph.ts'
+import { nodeLabelMap } from './labels.ts'
 import type { GraphState, TurnNodeId } from './types.ts'
 
 const NODE_WIDTH = 72
@@ -25,10 +26,12 @@ export interface GraphCanvasProps {
   readonly state: GraphState
   readonly previewNodeId: TurnNodeId | null
   readonly onPreview: (nodeId: TurnNodeId) => void
-}
-
-function nodeLabels(state: GraphState): ReadonlyMap<TurnNodeId, string> {
-  return new Map(orderedNodes(state).map((node, index) => [node.id, `PA${index + 1}`]))
+  /** Optional project-level PA labels ordered by completion time. */
+  readonly labels?: ReadonlyMap<TurnNodeId, string>
+  /** Optional stable color index per project Session. */
+  readonly nodeColors?: ReadonlyMap<TurnNodeId, number>
+  /** Disable fit-to-viewport so large project graphs remain scrollable. */
+  readonly fit?: boolean
 }
 
 /** Lay out the primary-parent tree; secondary parents are drawn as merge edges. */
@@ -100,11 +103,14 @@ function connector(parent: TreePosition, child: TreePosition): string {
 }
 
 /** Compact tree visualization: node details are intentionally kept out of the graph. */
-export function GraphCanvas({ state, previewNodeId, onPreview }: GraphCanvasProps) {
+export function GraphCanvas({
+  state, previewNodeId, onPreview, labels: suppliedLabels, nodeColors, fit = true,
+}: GraphCanvasProps) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const [viewport, setViewport] = useState({ width: 0, height: 0 })
   const layout = useMemo(() => layoutTree(state), [state])
-  const labels = useMemo(() => nodeLabels(state), [state])
+  const automaticLabels = useMemo(() => nodeLabelMap(state), [state])
+  const labels = suppliedLabels ?? automaticLabels
   const byId = useMemo(() => new Map(layout.positions.map(position => [position.nodeId, position])), [layout])
   const activePath = useMemo(() => new Set(primaryPath(state, state.headNodeId)), [state])
   const context = new Set(state.contextManifest)
@@ -126,13 +132,13 @@ export function GraphCanvas({ state, previewNodeId, onPreview }: GraphCanvasProp
 
   const availableWidth = Math.max(0, viewport.width - 24)
   const availableHeight = Math.max(0, viewport.height - 24)
-  const scale = viewport.width === 0 || viewport.height === 0
+  const scale = !fit || viewport.width === 0 || viewport.height === 0
     ? 1
     : Math.min(1, availableWidth / layout.width, availableHeight / layout.height)
   const fittedWidth = layout.width * scale
   const fittedHeight = layout.height * scale
 
-  return <div ref={viewportRef} className="dsh-git-tree-viewport">
+  return <div ref={viewportRef} className={`dsh-git-tree-viewport ${fit ? '' : 'dsh-git-tree-viewport-scroll'}`}>
     <div className="dsh-git-tree-fit" style={{ width: fittedWidth, height: fittedHeight }}>
       <div
         className="dsh-git-tree-stage"
@@ -162,7 +168,15 @@ export function GraphCanvas({ state, previewNodeId, onPreview }: GraphCanvasProp
         return <button
           type="button"
           className={`dsh-git-tree-node ${isPreview ? 'dsh-git-tree-node-preview' : ''} ${inContext ? 'dsh-git-tree-node-context' : ''}`}
-          style={{ left: position.x - NODE_WIDTH / 2, top: position.y, width: NODE_WIDTH, height: NODE_HEIGHT }}
+          style={{
+            left: position.x - NODE_WIDTH / 2,
+            top: position.y,
+            width: NODE_WIDTH,
+            height: NODE_HEIGHT,
+            '--dsh-git-node-color': nodeColors === undefined
+              ? undefined
+              : `var(--dsh-git-session-${nodeColors.get(node.id) ?? 0})`,
+          } as CSSProperties}
           key={node.id}
           title={`${label}: ${node.prompt || '（无文字问题）'}`}
           aria-label={`查看 ${label} context`}

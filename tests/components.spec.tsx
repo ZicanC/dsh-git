@@ -16,11 +16,11 @@ class TestResizeObserver {
 vi.stubGlobal('ResizeObserver', TestResizeObserver)
 
 describe('graph UI', () => {
-  const one = node({ id: 'pa1', prompt: 'Question one', createdAt: 1 })
+  const one = node({ id: 'pa-11111920b5', prompt: 'Question one', createdAt: 1 })
   const two = node({
-    id: 'pa2', prompt: 'Question two', createdAt: 2,
-    primaryParentId: 'pa1', parentIds: ['pa1'],
-    contextManifest: ['pa1'],
+    id: 'pa-22222800af', prompt: 'Question two', createdAt: 2,
+    primaryParentId: one.id, parentIds: [one.id],
+    contextManifest: [one.id],
   })
   const state = graph([one, two])
 
@@ -30,7 +30,17 @@ describe('graph UI', () => {
     expect(screen.getByText('HEAD')).toBeTruthy()
     expect(screen.queryByText('Question one')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '查看 PA1 context' }))
-    expect(preview).toHaveBeenCalledWith('pa1')
+    expect(preview).toHaveBeenCalledWith(one.id)
+  })
+
+  it('uses PA numbers in Context Tray and reserves hashes for the inspector', () => {
+    const tray = render(<ContextTray
+      state={state} busy={false} error={null}
+      onMove={vi.fn()} onMoveEnd={vi.fn()} onRemove={vi.fn()} onClear={vi.fn()} onAsk={vi.fn()}
+    />)
+    expect(within(tray.container).getByText('PA1')).toBeTruthy()
+    expect(within(tray.container).getByText('PA2')).toBeTruthy()
+    expect(within(tray.container).queryByText('PA-920b5')).toBeNull()
   })
 
   it('keeps the context panel hidden until a graph node is clicked', () => {
@@ -49,9 +59,38 @@ describe('graph UI', () => {
     expect(screen.queryByLabelText('节点 Context')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '查看 PA2 context' }))
     expect(screen.getByLabelText('节点 Context')).toBeTruthy()
+    expect(screen.getByText('PA-800af')).toBeTruthy()
     expect(screen.getByText('回答时使用的 CONTEXT')).toBeTruthy()
     expect(within(screen.getByLabelText('回答时使用的 Context')).getByText('Question one')).toBeTruthy()
     expect(screen.getAllByText('Question two')).toHaveLength(2)
+  })
+
+  it('renders prompt and answer Markdown in the context panel', () => {
+    const markdownNode = node({
+      id: 'pa-markdown',
+      prompt: '## Prompt heading\n\nUse **rendered text**.',
+      answer: 'Answer with `inline code` and:\n\n- first item\n- second item',
+      createdAt: 1,
+    })
+    const markdownState = graph([markdownNode])
+    const snapshot = {
+      chat: { timeline: { turnOrder: [], turns: new Map() } },
+      nodes: [],
+    }
+    render(<GraphView {...({
+      useSession: (selector: (value: unknown) => unknown) => selector(snapshot),
+      useGraph: (selector: (value: unknown) => unknown) => selector(markdownState),
+      syncTurns: vi.fn(), toggleContext: vi.fn(), moveContext: vi.fn(),
+      moveContextToEnd: vi.fn(), clearContext: vi.fn(), checkout: vi.fn(),
+      renameBranch: vi.fn(), ask: vi.fn(),
+    } as never)} />)
+
+    fireEvent.click(screen.getByRole('button', { name: '查看 PA1 context' }))
+    const panel = screen.getByLabelText('节点 Context')
+    expect(within(panel).getByRole('heading', { level: 2, name: 'Prompt heading' })).toBeTruthy()
+    expect(within(panel).getByText('rendered text').tagName).toBe('STRONG')
+    expect(within(panel).getByText('inline code').tagName).toBe('CODE')
+    expect(within(panel).getByRole('list').children).toHaveLength(2)
   })
 
   it('keeps the question when branch creation fails and displays the supplied error', async () => {

@@ -5,6 +5,12 @@ import type {
 
 const STORAGE_KEY = 'dsh-git.graph.v1'
 
+function storageKey(scopeId?: string): string {
+  return scopeId === undefined
+    ? STORAGE_KEY
+    : `${STORAGE_KEY}.workspace.${encodeURIComponent(scopeId)}`
+}
+
 const EMPTY_STATE: GraphState = {
   format: 1,
   nodes: {},
@@ -51,10 +57,20 @@ function parseState(raw: string | null): GraphState {
 export class GraphRepository {
   private state: GraphState
   private readonly listeners = new Set<() => void>()
+  private readonly storageKey: string
 
-  /** @param storage - browser storage; omitted keeps an in-memory repository. */
-  constructor(private readonly storage?: BrowserStorage) {
-    this.state = parseState(storage?.getItem(STORAGE_KEY) ?? null)
+  /**
+   * @param storage - browser storage; omitted keeps an in-memory repository.
+   * @param scopeId - one Workspace-folder id; omitted preserves the standalone repository API.
+   * @param fallbackState - one-time seed used only when the scoped key does not exist yet.
+   */
+  constructor(private readonly storage?: BrowserStorage, scopeId?: string, fallbackState?: GraphState) {
+    this.storageKey = storageKey(scopeId)
+    const raw = storage?.getItem(this.storageKey) ?? null
+    this.state = raw === null && fallbackState !== undefined ? fallbackState : parseState(raw)
+    if (raw === null && fallbackState !== undefined) {
+      storage?.setItem(this.storageKey, JSON.stringify(fallbackState))
+    }
   }
 
   /** Return the stable snapshot until the next mutation. */
@@ -68,7 +84,7 @@ export class GraphRepository {
 
   private commit(next: GraphState): void {
     this.state = next
-    this.storage?.setItem(STORAGE_KEY, JSON.stringify(next))
+    this.storage?.setItem(this.storageKey, JSON.stringify(next))
     for (const listener of this.listeners) listener()
   }
 

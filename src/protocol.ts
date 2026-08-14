@@ -13,6 +13,111 @@ export interface CreateMergedSessionPayload {
 
 export const CREATE_MERGED_SESSION_COMMAND = 'dsh-git-create-merged-session'
 
+/** Generic Connection channel and endpoint used by the project graph reader. */
+export const PROJECT_GRAPH_RPC_CHANNEL = '/dsh-git'
+export const PROJECT_GRAPH_RPC_ENDPOINT = 'workspace/graph'
+
+/** Browser request for the complete completed-turn history of one Workspace. */
+export interface ProjectGraphRequest {
+  readonly workspaceId: string
+}
+
+/** One completed Prompt + Answer turn returned by the Host. */
+export interface ProjectTurnDTO {
+  readonly turn: number
+  readonly prompt: string
+  readonly answer: string
+  readonly startedAt: number
+  readonly completedAt: number
+  readonly boundarySeq: number
+  readonly inherited: boolean
+  readonly fingerprint: string
+}
+
+/** One Workspace member Session and its completed turns. */
+export interface ProjectSessionDTO {
+  readonly sessionId: string
+  readonly createdAt: number
+  readonly parentSessionId?: string
+  readonly seedLength: number
+  readonly turns: readonly ProjectTurnDTO[]
+}
+
+/** Complete read-only history used to assemble one project graph. */
+export interface ProjectGraphResponse {
+  readonly workspaceId: string
+  readonly sessions: readonly ProjectSessionDTO[]
+}
+
+function object(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`)
+  }
+  return value as Record<string, unknown>
+}
+
+function nonBlank(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value.trim() === '') throw new Error(`${label} must be a non-blank string`)
+  return value
+}
+
+function nonNegativeInteger(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) throw new Error(`${label} must be a non-negative integer`)
+  return value as number
+}
+
+/** Strictly validate the untrusted project graph RPC request. */
+export function decodeProjectGraphRequest(value: unknown): ProjectGraphRequest {
+  const candidate = object(value, 'dsh-git project graph request')
+  return { workspaceId: nonBlank(candidate.workspaceId, 'workspaceId') }
+}
+
+/** Strictly validate the project graph response received across Connection. */
+export function decodeProjectGraphResponse(value: unknown): ProjectGraphResponse {
+  const candidate = object(value, 'dsh-git project graph response')
+  const workspaceId = nonBlank(candidate.workspaceId, 'workspaceId')
+  if (!Array.isArray(candidate.sessions)) throw new Error('sessions must be an array')
+  const sessions = candidate.sessions.map((rawSession, sessionIndex): ProjectSessionDTO => {
+    const session = object(rawSession, `session ${sessionIndex + 1}`)
+    const sessionId = nonBlank(session.sessionId, `session ${sessionIndex + 1} sessionId`)
+    const createdAt = nonNegativeInteger(session.createdAt, `session ${sessionIndex + 1} createdAt`)
+    const seedLength = nonNegativeInteger(session.seedLength, `session ${sessionIndex + 1} seedLength`)
+    const parentSessionId = session.parentSessionId === undefined
+      ? undefined
+      : nonBlank(session.parentSessionId, `session ${sessionIndex + 1} parentSessionId`)
+    if (!Array.isArray(session.turns)) throw new Error(`session ${sessionIndex + 1} turns must be an array`)
+    const turns = session.turns.map((rawTurn, turnIndex): ProjectTurnDTO => {
+      const turn = object(rawTurn, `session ${sessionIndex + 1} turn ${turnIndex + 1}`)
+      const turnNumber = nonNegativeInteger(turn.turn, `session ${sessionIndex + 1} turn number`)
+      if (turnNumber < 1) throw new Error(`session ${sessionIndex + 1} turn number must be positive`)
+      if (typeof turn.prompt !== 'string' || typeof turn.answer !== 'string') {
+        throw new Error(`session ${sessionIndex + 1} turn ${turnIndex + 1} text must be strings`)
+      }
+      if (typeof turn.inherited !== 'boolean') {
+        throw new Error(`session ${sessionIndex + 1} turn ${turnIndex + 1} inherited must be boolean`)
+      }
+      return {
+        turn: turnNumber,
+        prompt: turn.prompt,
+        answer: turn.answer,
+        startedAt: nonNegativeInteger(turn.startedAt, `session ${sessionIndex + 1} turn ${turnIndex + 1} startedAt`),
+        completedAt: nonNegativeInteger(turn.completedAt, `session ${sessionIndex + 1} turn ${turnIndex + 1} completedAt`),
+        boundarySeq: nonNegativeInteger(turn.boundarySeq, `session ${sessionIndex + 1} turn ${turnIndex + 1} boundarySeq`),
+        inherited: turn.inherited,
+        fingerprint: nonBlank(turn.fingerprint, `session ${sessionIndex + 1} turn ${turnIndex + 1} fingerprint`),
+      }
+    })
+    return {
+      sessionId,
+      createdAt,
+      ...(parentSessionId === undefined ? {} : { parentSessionId }),
+      seedLength,
+      turns,
+    }
+  })
+  return { workspaceId, sessions }
+}
+
 /** Encode the small JSON payload without exposing selected conversation text in the command log. */
 export function encodeCreateMergedSessionPayload(payload: CreateMergedSessionPayload): string {
   return encodeURIComponent(JSON.stringify(payload))

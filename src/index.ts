@@ -6,14 +6,19 @@ import type {} from '@deepseek-ai/dsh-commands'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-query'
 import type {} from '@deepseek-ai/dsh-workspace'
+import type {} from './connection-contract.ts'
 import { buildMergedSessionSeed } from './history.ts'
+import { projectSession } from './project-history.ts'
 import {
   CREATE_MERGED_SESSION_COMMAND,
+  PROJECT_GRAPH_RPC_CHANNEL,
+  PROJECT_GRAPH_RPC_ENDPOINT,
   decodeCreateMergedSessionPayload,
+  decodeProjectGraphRequest,
 } from './protocol.ts'
 
 export const name = 'dsh-git'
-export const inject = ['agents', 'agentPresets', 'commands', 'sessionQuery', 'workspaceRegistry']
+export const inject = ['agents', 'agentPresets', 'commands', 'connection', 'sessionQuery', 'workspaceRegistry']
 
 /** Repair merge sessions created by versions that copied cwd but forgot Workspace membership. */
 async function repairWorkspaceMembership(ctx: Context): Promise<void> {
@@ -39,6 +44,40 @@ async function repairWorkspaceMembership(ctx: Context): Promise<void> {
 /** Mount the private history-composition command used by the browser half. */
 export async function apply(ctx: Context): Promise<void> {
   await repairWorkspaceMembership(ctx)
+  ctx.connection.rpc.handle(PROJECT_GRAPH_RPC_CHANNEL, async (endpoint, payload) => {
+    if (endpoint !== PROJECT_GRAPH_RPC_ENDPOINT) {
+      return { ok: false, error: { code: 'internal', message: `unknown dsh-git endpoint "${endpoint}"`, details: {} } }
+    }
+    let request
+    try {
+      request = decodeProjectGraphRequest(payload)
+    } catch (error: unknown) {
+      return {
+        ok: false,
+        error: { code: 'internal', message: error instanceof Error ? error.message : String(error), details: {} },
+      }
+    }
+    const workspace = ctx.workspaceRegistry.list()
+      .find(candidate => candidate.id === request.workspaceId)
+    if (workspace === undefined) {
+      return {
+        ok: false,
+        error: { code: 'internal', message: `workspace "${request.workspaceId}" was not found`, details: {} },
+      }
+    }
+    try {
+      const sessions = await Promise.all(workspace.sessionIds.map(async sessionId =>
+        projectSession(await ctx.sessionQuery.readSession(SessionId(sessionId)))))
+      sessions.sort((left, right) => left.createdAt - right.createdAt
+        || left.sessionId.localeCompare(right.sessionId))
+      return { ok: true, value: { workspaceId: request.workspaceId, sessions } }
+    } catch (error: unknown) {
+      return {
+        ok: false,
+        error: { code: 'internal', message: error instanceof Error ? error.message : String(error), details: {} },
+      }
+    }
+  }, { authority: 'trusted-host' })
   ctx.commands.register({
     name: CREATE_MERGED_SESSION_COMMAND,
     description: 'Create a dsh-git branch from selected historical turns',
