@@ -18,7 +18,7 @@ function turn(overrides: Partial<ProjectTurnDTO> & Pick<ProjectTurnDTO, 'turn' |
 }
 
 describe('project graph assembly', () => {
-  it('deduplicates a normal fork seed and attaches the first new PA to the shared prefix', () => {
+  it('renders one fork-point copy without consuming a PA number and attaches the next PA below it', () => {
     const response: ProjectGraphResponse = {
       workspaceId: 'w1',
       sessions: [
@@ -33,10 +33,45 @@ describe('project graph assembly', () => {
     const model = assembleProjectGraph(response, graph([]), { root: 'Root', fork: 'Fork' })
     expect(model.timeline).toHaveLength(3)
     expect(model.state.sessionTurnRefs.fork?.[1]).toBe(model.state.sessionTurnRefs.root?.[1])
-    expect(model.state.sessionTurnRefs.fork?.[2]).toBe(model.state.sessionTurnRefs.root?.[2])
+    const forkTip = model.state.sessionTurnRefs.fork?.[2] ?? ''
+    const sourceTip = model.state.sessionTurnRefs.root?.[2] ?? ''
+    expect(forkTip).not.toBe(sourceTip)
+    expect(model.nodes[forkTip]?.forkSourceId).toBe(sourceTip)
+    expect(model.nodes[forkTip]?.primaryParentId).toBe(model.state.sessionTurnRefs.root?.[1])
     const third = model.nodes[model.state.sessionTurnRefs.fork?.[3] ?? '']!
-    expect(third.parentIds).toEqual([model.state.sessionTurnRefs.root?.[2]])
+    expect(third.parentIds).toEqual([forkTip])
     expect(third.firstInSession).toBe(true)
+    expect(projectGraphAt(model, 2).nodes[forkTip]).toBeUndefined()
+    expect(projectGraphAt(model, 3).nodes[forkTip]).toBeDefined()
+  })
+
+  it('ignores duplicate local ledger ids for an official fork prefix', () => {
+    const localOne = node({ id: 'local-one', sessionId: 'root', turn: 1, createdAt: 10 })
+    const localTwo = node({ id: 'local-two', sessionId: 'root', turn: 2, createdAt: 20, primaryParentId: 'local-one', parentIds: ['local-one'] })
+    const copiedOne = node({ id: 'copied-one', sessionId: 'fork', turn: 1, createdAt: 10 })
+    const copiedTwo = node({ id: 'copied-two', sessionId: 'fork', turn: 2, createdAt: 20, primaryParentId: 'copied-one', parentIds: ['copied-one'] })
+    const copiedThree = node({ id: 'copied-three', sessionId: 'fork', turn: 3, createdAt: 40, primaryParentId: 'copied-two', parentIds: ['copied-two'] })
+    const local = graph([localOne, localTwo, copiedOne, copiedTwo, copiedThree], {
+      sessionTurnRefs: { root: { 1: 'local-one', 2: 'local-two' }, fork: { 1: 'copied-one', 2: 'copied-two', 3: 'copied-three' } },
+    })
+    const response: ProjectGraphResponse = {
+      workspaceId: 'w',
+      sessions: [
+        { sessionId: 'root', createdAt: 1, seedLength: 0, turns: [turn({ turn: 1, fingerprint: 'one' }), turn({ turn: 2, fingerprint: 'two' })] },
+        { sessionId: 'fork', createdAt: 30, parentSessionId: 'root', seedLength: 10, turns: [
+          turn({ turn: 1, fingerprint: 'one', inherited: true }),
+          turn({ turn: 2, fingerprint: 'two', inherited: true }),
+          turn({ turn: 3, fingerprint: 'three', startedAt: 40, completedAt: 50 }),
+        ] },
+      ],
+    }
+
+    const model = assembleProjectGraph(response, local)
+    expect(model.state.sessionTurnRefs.fork?.[1]).toBe('local-one')
+    expect(model.timeline).toEqual(['local-one', 'local-two', model.state.sessionTurnRefs.fork?.[3]])
+    expect(model.nodes['copied-one']).toBeUndefined()
+    expect(model.nodes['copied-two']).toBeUndefined()
+    expect(model.nodes['copied-three']?.parentIds).toEqual([model.state.sessionTurnRefs.fork?.[2]])
   })
 
   it('preserves exact local multi-parent merge relations', () => {
@@ -104,9 +139,10 @@ describe('project graph assembly', () => {
     const model = assembleProjectGraph(response, local)
     expect(model.state.sessionTurnRefs['official-fork']?.[1]).toBe('one')
     expect(model.state.sessionTurnRefs['official-fork']?.[2]).toBe('seven')
-    expect(model.state.sessionTurnRefs['official-fork']?.[3]).toBe('merge')
+    const forkTip = model.state.sessionTurnRefs['official-fork']?.[3] ?? ''
+    expect(model.nodes[forkTip]?.forkSourceId).toBe('merge')
     const next = model.nodes[model.state.sessionTurnRefs['official-fork']?.[4] ?? '']!
-    expect(next.parentIds).toEqual(['merge'])
+    expect(next.parentIds).toEqual([forkTip])
     expect(next.firstInSession).toBe(true)
   })
 

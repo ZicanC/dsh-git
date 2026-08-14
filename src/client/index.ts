@@ -63,9 +63,18 @@ export function apply(ctx: Context): void {
     label: '分支',
     inject: (sessionId: SessionId): GraphViewInjected => {
       const repository = repositories.forSession(sessionId)
+      const sessionParents = (): Record<string, string> => Object.fromEntries(
+        Object.values(sessions.list.getSnapshot().byId).flatMap(item => item.parentId === undefined
+          ? []
+          : [[String(item.id), String(item.parentId)]]),
+      )
+      repository.reconcileOfficialForks(sessionParents())
       return {
         hooks: { graph: repository },
-        syncTurns: turns => repository.syncSession(sessionId, turns),
+        syncTurns: turns => {
+          repository.syncSession(sessionId, turns)
+          repository.reconcileOfficialForks(sessionParents())
+        },
         toggleContext: nodeId => repository.toggleContext(nodeId),
         moveContext: (nodeId, beforeId) => repository.moveContext(nodeId, beforeId),
         moveContextToEnd: nodeId => repository.moveContextToEnd(nodeId),

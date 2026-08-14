@@ -33,6 +33,10 @@ function branchId(sessionId: string): string {
   return `project-branch:${encodeURIComponent(sessionId)}`
 }
 
+function forkNodeId(sessionId: string, turn: number): TurnNodeId {
+  return `project-fork:${encodeURIComponent(sessionId)}:${turn}`
+}
+
 function exactFingerprintCandidates(
   addresses: readonly TurnAddress[],
   local: GraphState,
@@ -67,16 +71,23 @@ export function assembleProjectGraph(
   const addressKey = (sessionId: string, turn: number): string => `${sessionId}\u0000${turn}`
   const sessionsById = new Map(sessions.map(session => [session.sessionId, session]))
   const resolving = new Set<string>()
+  const ordinaryForkTips = new Map<string, number>()
+
+  for (const session of sessions) {
+    if (session.parentSessionId === undefined) continue
+    const parent = sessionsById.get(session.parentSessionId)
+    const inherited = session.turns.filter(turn => turn.inherited)
+    if (parent === undefined || inherited.length === 0) continue
+    const isContiguousParentPrefix = inherited.every(turn => parent.turns.some(candidate =>
+      candidate.turn === turn.turn && candidate.fingerprint === turn.fingerprint))
+    if (isContiguousParentPrefix) ordinaryForkTips.set(session.sessionId, inherited.at(-1)!.turn)
+  }
 
   const resolveCanonical = (session: ProjectSessionDTO, turn: ProjectTurnDTO): TurnNodeId => {
     const key = addressKey(session.sessionId, turn.turn)
     const cached = canonical.get(key)
     if (cached !== undefined) return cached
     const localId = local.sessionTurnRefs[session.sessionId]?.[turn.turn]
-    if (localId !== undefined && local.nodes[localId] !== undefined) {
-      canonical.set(key, localId)
-      return localId
-    }
 
     // An ordinary Harness fork copies a contiguous prefix without renumbering
     // its turns. Prefer that explicit lineage over a Workspace-wide content
@@ -91,9 +102,17 @@ export function assembleProjectGraph(
         resolving.add(key)
         const parentId = resolveCanonical(parent, parentTurn)
         resolving.delete(key)
-        canonical.set(key, parentId)
-        return parentId
+        const id = ordinaryForkTips.get(session.sessionId) === turn.turn
+          ? forkNodeId(session.sessionId, turn.turn)
+          : parentId
+        canonical.set(key, id)
+        return id
       }
+    }
+
+    if (localId !== undefined && local.nodes[localId] !== undefined) {
+      canonical.set(key, localId)
+      return localId
     }
 
     const matches = candidates.get(turn.fingerprint) ?? []
@@ -126,27 +145,46 @@ export function assembleProjectGraph(
       const localNode = local.nodes[id]
       const existing = nodes[id]
       if (existing === undefined) {
-        const useLocalRelations = localNode !== undefined
-        const parentIds = useLocalRelations
-          ? localNode.parentIds.filter(parentId => local.nodes[parentId] !== undefined)
-          : previousId === null ? [] : [previousId]
-        const primaryParentId = useLocalRelations ? localNode.primaryParentId : previousId
+        const isForkMarker = id === forkNodeId(sid, turn.turn)
+        const parentSession = session.parentSessionId === undefined ? undefined : sessionsById.get(session.parentSessionId)
+        const parentTurn = isForkMarker
+          ? parentSession?.turns.find(candidate => candidate.turn === turn.turn && candidate.fingerprint === turn.fingerprint)
+          : undefined
+        const forkSourceId = parentSession !== undefined && parentTurn !== undefined
+          ? canonical.get(addressKey(parentSession.sessionId, parentTurn.turn))
+          : undefined
+        const forkSource = forkSourceId === undefined ? undefined : nodes[forkSourceId]
+        // A viewed official fork may already have browser-ledger nodes for its
+        // copied prefix. Their relations point at those duplicate ids, so use
+        // the proven Host lineage for the entire ordinary-fork branch.
+        const useLocalRelations = localNode !== undefined && !isForkMarker && !ordinaryForkTips.has(sid)
+        const primaryParentId = isForkMarker
+          ? forkSource?.primaryParentId ?? null
+          : useLocalRelations ? localNode.primaryParentId : previousId
+        const parentIds = isForkMarker
+          ? primaryParentId === null ? [] : [primaryParentId]
+          : useLocalRelations
+            ? localNode.parentIds.filter(parentId => local.nodes[parentId] !== undefined)
+            : previousId === null ? [] : [previousId]
         nodes[id] = {
           id,
           sessionId: localNode?.sessionId ?? sid,
           turn: localNode?.turn ?? turn.turn,
           prompt: localNode?.prompt ?? turn.prompt,
           answer: localNode?.answer ?? turn.answer,
-          createdAt: localNode?.createdAt ?? turn.startedAt,
+          createdAt: isForkMarker ? session.createdAt : localNode?.createdAt ?? turn.startedAt,
           completedAt: turn.completedAt,
           sessionCreatedAt: session.createdAt,
           sessionTitle: titleOf(localNode?.sessionId ?? sid, titles),
           firstInSession: !turn.inherited && firstOwn,
           fingerprint: turn.fingerprint,
+          ...(forkSourceId === undefined ? {} : { forkSourceId }),
           boundarySeq: localNode?.boundarySeq ?? turn.boundarySeq,
           primaryParentId,
           parentIds,
-          contextManifest: localNode?.contextManifest ?? (primaryParentId === null ? [] : [primaryParentId]),
+          contextManifest: isForkMarker
+            ? forkSource?.contextManifest ?? (primaryParentId === null ? [] : [primaryParentId])
+            : localNode?.contextManifest ?? (primaryParentId === null ? [] : [primaryParentId]),
           branchId: localNode?.branchId ?? bid,
         }
       }
@@ -184,6 +222,7 @@ export function assembleProjectGraph(
     nodes[id] = { ...node, contextManifest: primaryPath(provisional, node.primaryParentId) }
   }
   const timeline = Object.values(nodes)
+    .filter(node => node.forkSourceId === undefined)
     .sort((left, right) => left.completedAt - right.completedAt || left.id.localeCompare(right.id))
     .map(node => node.id)
   const headNodeId = timeline.at(-1) ?? null
@@ -197,7 +236,12 @@ export function assembleProjectGraph(
 
 /** Return the graph prefix visible at one one-based PA timeline position. */
 export function projectGraphAt(model: ProjectGraphModel, count: number): GraphState {
-  const visibleIds = new Set(model.timeline.slice(0, Math.max(1, Math.min(count, model.timeline.length))))
+  const timelineCount = Math.max(1, Math.min(count, model.timeline.length))
+  const visibleIds = new Set(model.timeline.slice(0, timelineCount))
+  const cutoff = model.nodes[model.timeline[timelineCount - 1] ?? '']?.completedAt ?? Number.NEGATIVE_INFINITY
+  for (const node of Object.values(model.nodes)) {
+    if (node.forkSourceId !== undefined && node.sessionCreatedAt <= cutoff) visibleIds.add(node.id)
+  }
   const nodes = Object.fromEntries(Object.entries(model.state.nodes).flatMap(([id, node]) =>
     visibleIds.has(id) ? [[id, {
       ...node,

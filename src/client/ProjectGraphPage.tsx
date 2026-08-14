@@ -59,16 +59,24 @@ export function ProjectGraphPage({
     return () => { window.removeEventListener('keydown', close) }
   }, [onClose])
 
-  const labels = useMemo(() => new Map(model?.timeline.map((id, index) => [id, `PA${index + 1}`]) ?? []), [model])
+  const labels = useMemo(() => {
+    const result = new Map<TurnNodeId, string>(model?.timeline.map((id, index) => [id, `PA${index + 1}`]) ?? [])
+    if (model === null) return result
+    for (const node of Object.values(model.nodes)) {
+      if (node.forkSourceId === undefined) continue
+      result.set(node.id, `${result.get(node.forkSourceId) ?? 'PA'} fork`)
+    }
+    return result
+  }, [model])
   const nodeColors = useMemo(() => {
     const colors = new Map<TurnNodeId, number>()
     if (model === null) return colors
     const sessions = new Map<string, number>()
-    for (const id of model.timeline) {
-      const node = model.nodes[id]
-      if (node === undefined) continue
+    const nodes = Object.values(model.nodes).sort((left, right) =>
+      left.sessionCreatedAt - right.sessionCreatedAt || left.id.localeCompare(right.id))
+    for (const node of nodes) {
       if (!sessions.has(node.sessionId)) sessions.set(node.sessionId, sessions.size % 8)
-      colors.set(id, sessions.get(node.sessionId)!)
+      colors.set(node.id, sessions.get(node.sessionId)!)
     }
     return colors
   }, [model])

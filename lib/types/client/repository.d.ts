@@ -22,6 +22,8 @@ export declare class GraphRepository {
     private commit;
     /** Import completed turns from the currently viewed DSH session. */
     syncSession(sessionId: string, turns: readonly ImportedTurn[]): void;
+    /** Collapse browser-imported copies from ordinary Host forks into one labeled fork point. */
+    reconcileOfficialForks(parents: Readonly<Record<string, string>>): void;
     /** Record an auto-created child session before its first merged request completes. */
     prepareBranch(input: PrepareBranchInput): void;
     /** Remove a pending merge after a rejected prompt. */

@@ -38,6 +38,10 @@ function distinct(ids: readonly TurnNodeId[]): readonly TurnNodeId[] {
   return [...new Set(ids)]
 }
 
+function officialForkNodeId(sessionId: string, turn: number): TurnNodeId {
+  return `fork-${encodeURIComponent(sessionId)}-${turn}`
+}
+
 function parseState(raw: string | null): GraphState {
   if (raw === null) return EMPTY_STATE
   try {
@@ -170,6 +174,99 @@ export class GraphRepository {
       contextManifest: shouldSeedTray ? primaryPath({ ...next, nodes }, headId) : next.contextManifest,
     }
     if (JSON.stringify(final) !== JSON.stringify(this.state)) this.commit(final)
+  }
+
+  /** Collapse browser-imported copies from ordinary Host forks into one labeled fork point. */
+  reconcileOfficialForks(parents: Readonly<Record<string, string>>): void {
+    let next = this.state
+    for (const [childSessionId, parentSessionId] of Object.entries(parents)) {
+      if (childSessionId.startsWith('dsh-git-')) continue
+      const childRefs = next.sessionTurnRefs[childSessionId]
+      const parentRefs = next.sessionTurnRefs[parentSessionId]
+      if (childRefs === undefined || parentRefs === undefined) continue
+
+      const prefix: Array<{ turn: number; childId: TurnNodeId; sourceId: TurnNodeId }> = []
+      for (const [rawTurn, childId] of Object.entries(childRefs).sort(([left], [right]) => Number(left) - Number(right))) {
+        const turn = Number(rawTurn)
+        const sourceId = parentRefs[turn]
+        if (sourceId === undefined) break
+        const child = next.nodes[childId]
+        const source = next.nodes[sourceId]
+        if (child === undefined || source === undefined
+          || child.prompt !== source.prompt || child.answer !== source.answer) break
+        prefix.push({ turn, childId, sourceId })
+      }
+      const tip = prefix.at(-1)
+      if (tip === undefined) continue
+      const branchId = next.sessionBranches[childSessionId]
+      const branch = branchId === undefined ? undefined : next.branches[branchId]
+      if (branchId === undefined || branch === undefined) continue
+
+      const markerId = officialForkNodeId(childSessionId, tip.turn)
+      const sourceTip = next.nodes[tip.sourceId]!
+      const remaining = Object.entries(childRefs)
+        .map(([turn, nodeId]) => ({ turn: Number(turn), nodeId }))
+        .filter(entry => entry.turn > tip.turn)
+        .sort((left, right) => left.turn - right.turn)
+      const firstOwnCreatedAt = next.nodes[remaining[0]?.nodeId ?? '']?.createdAt
+      const markerCreatedAt = firstOwnCreatedAt === undefined
+        ? sourceTip.createdAt + 0.001
+        : Math.max(sourceTip.createdAt + 0.001, firstOwnCreatedAt - 0.001)
+      const marker: TurnNode = {
+        ...sourceTip,
+        id: markerId,
+        sessionId: childSessionId,
+        turn: tip.turn,
+        createdAt: markerCreatedAt,
+        branchId,
+        forkSourceId: tip.sourceId,
+      }
+      const refs: Record<number, TurnNodeId> = {}
+      const replacements = new Map<TurnNodeId, TurnNodeId>()
+      for (const entry of prefix.slice(0, -1)) {
+        refs[entry.turn] = entry.sourceId
+        replacements.set(entry.childId, entry.sourceId)
+      }
+      refs[tip.turn] = markerId
+      replacements.set(tip.childId, markerId)
+
+      let nodes = { ...next.nodes, [markerId]: marker }
+      let previousId = markerId
+      for (const entry of remaining) {
+        const node = nodes[entry.nodeId]
+        if (node === undefined) continue
+        refs[entry.turn] = entry.nodeId
+        nodes[entry.nodeId] = {
+          ...node,
+          primaryParentId: previousId,
+          parentIds: [previousId],
+          contextManifest: primaryPath({ ...next, nodes }, previousId),
+        }
+        previousId = entry.nodeId
+      }
+      for (const entry of prefix) {
+        if (entry.childId === entry.sourceId || entry.childId === markerId) continue
+        if (nodes[entry.childId]?.sessionId === childSessionId) delete nodes[entry.childId]
+      }
+      const replace = (nodeId: TurnNodeId): TurnNodeId => replacements.get(nodeId) ?? nodeId
+      nodes = Object.fromEntries(Object.entries(nodes).map(([nodeId, node]) => [nodeId, {
+        ...node,
+        primaryParentId: node.primaryParentId === null ? null : replace(node.primaryParentId),
+        parentIds: distinct(node.parentIds.map(replace)),
+        contextManifest: distinct(node.contextManifest.map(replace)),
+      }]))
+      const contextManifest = distinct(next.contextManifest.map(replace)).filter(nodeId => nodes[nodeId] !== undefined)
+      next = {
+        ...next,
+        nodes,
+        branches: { ...next.branches, [branchId]: { ...branch, headId: previousId } },
+        sessionTurnRefs: { ...next.sessionTurnRefs, [childSessionId]: refs },
+        headNodeId: next.headNodeId === null ? null : replace(next.headNodeId),
+        previewNodeId: next.previewNodeId === null ? null : replace(next.previewNodeId),
+        contextManifest,
+      }
+    }
+    if (JSON.stringify(next) !== JSON.stringify(this.state)) this.commit(next)
   }
 
   /** Record an auto-created child session before its first merged request completes. */

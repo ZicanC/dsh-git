@@ -24,6 +24,21 @@ const response: ProjectGraphResponse = {
   }],
 }
 
+const forkResponse: ProjectGraphResponse = {
+  workspaceId: 'w',
+  sessions: [
+    response.sessions[0]!,
+    {
+      sessionId: 'fork', createdAt: 50, parentSessionId: 's', seedLength: 8,
+      turns: [
+        { ...response.sessions[0]!.turns[0]!, inherited: true },
+        { ...response.sessions[0]!.turns[1]!, inherited: true },
+        { turn: 3, prompt: 'Fork prompt', answer: 'Fork answer', startedAt: 60, completedAt: 70, boundarySeq: 11, inherited: false, fingerprint: 'three' },
+      ],
+    },
+  ],
+}
+
 describe('project graph page', () => {
   it('opens on the full graph and scrubs back to the root PA', async () => {
     render(<ProjectGraphPage
@@ -52,6 +67,17 @@ describe('project graph page', () => {
     expect(screen.getByText('Second answer')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '打开原会话' }))
     expect(open).toHaveBeenCalledWith('s')
+  })
+
+  it('labels the fork point as PA2 fork and the first new answer as PA3', async () => {
+    render(<ProjectGraphPage
+      workspaceId="w" workspaceTitle="Project" sessionTitles={{ s: 'Session one', fork: 'Session fork' }}
+      load={async () => forkResponse} getLocalState={() => graph([])}
+      onClose={vi.fn()} onOpenSession={vi.fn()}
+    />)
+    expect(await screen.findByRole('button', { name: '查看 PA2 fork context' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '查看 PA3 context' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '查看 PA4 context' })).toBeNull()
   })
 
   it('surfaces a load error and retries', async () => {

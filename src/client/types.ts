@@ -26,6 +26,8 @@ export interface TurnNode {
   readonly parentIds: readonly TurnNodeId[]
   readonly contextManifest: readonly TurnNodeId[]
   readonly branchId: BranchId
+  /** Visual copy of the source PA at which an ordinary Harness fork begins. */
+  readonly forkSourceId?: TurnNodeId
 }
 
 /** One named branch and its latest completed node. */

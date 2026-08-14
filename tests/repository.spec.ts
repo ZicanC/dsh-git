@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { GraphRepository } from '../src/client/repository.ts'
+import { nodeLabelMap } from '../src/client/labels.ts'
 
 class MemoryStorage {
   value: string | null = null
@@ -72,6 +73,30 @@ describe('GraphRepository', () => {
     expect(merged.contextManifest).toEqual([two, one])
     expect(merged.prompt).toBe('merged question')
     expect(state.pendingMerges.child).toBeUndefined()
+  })
+
+  it('collapses an official fork prefix into PA2 fork and repairs its existing child edge', () => {
+    const repository = new GraphRepository()
+    repository.syncSession('source', [turn(1), turn(2), { ...turn(3, 50), prompt: 'q78', answer: 'a78' }])
+    repository.syncSession('child', [turn(1), turn(2), { ...turn(3, 40), prompt: 'q56', answer: 'a56' }])
+
+    repository.reconcileOfficialForks({ child: 'source' })
+
+    const state = repository.getSnapshot()
+    const sourceOne = state.sessionTurnRefs.source![1]!
+    const sourceTwo = state.sessionTurnRefs.source![2]!
+    const forkOne = state.sessionTurnRefs.child![1]!
+    const forkTip = state.sessionTurnRefs.child![2]!
+    const forkNext = state.sessionTurnRefs.child![3]!
+    expect(forkOne).toBe(sourceOne)
+    expect(state.nodes[forkTip]?.forkSourceId).toBe(sourceTwo)
+    expect(state.nodes[forkTip]?.primaryParentId).toBe(sourceOne)
+    expect(state.nodes[forkNext]?.parentIds).toEqual([forkTip])
+    const labels = nodeLabelMap(state)
+    expect(labels.get(forkTip)).toBe('PA2 fork')
+    expect(labels.get(forkNext)).toBe('PA3')
+    expect(Object.values(state.nodes).filter(node => node.prompt === 'q1')).toHaveLength(1)
+    expect(Object.values(state.nodes).filter(node => node.prompt === 'q2')).toHaveLength(2)
   })
 
   it('persists a branch rename', () => {

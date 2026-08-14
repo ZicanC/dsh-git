@@ -6,8 +6,8 @@ The UI is Chinese to match the current DSH Web product surface.
 
 ## What it provides
 
-- A compact **Conversation Graph** tree with forks, merge edges, and a visible `HEAD`; Prompt, Answer, and historical context appear only after clicking a PA node.
-- A project-level **Conversation Graph** opened from the graph button beside each Workspace row. It reads every completed PA in that Workspace, deduplicates fork seeds, and takes over the main column without changing the selected Session.
+- A compact per-Session **Conversation Graph** tree with forks, merge edges, and a visible `HEAD`; an official Harness fork shares its inherited prefix, renders the copied tip as `PA<n> fork`, and continues new PAs beneath that marker. Prompt, Answer, and historical context appear only after clicking a PA node.
+- A project-level **Conversation Graph** opened from the graph button beside each Workspace row. It reads every completed PA in that Workspace, collapses copied fork history into one `PA<n> fork` branch-point alias that does not consume a new PA number, and takes over the main column without changing the selected Session.
 - A Fusion-style PA timeline. It opens at the complete graph and scrubs left one completed PA at a time; each Session's first new PA is marked on the rail.
 - Independent `HEAD`, preview, and context-selection state: clicking a node previews it; its checkbox changes the next model context; “切换到此分支” checks out its DSH session.
 - An ordered **Context Tray**. New selections default to creation-time order; drag-and-drop creates an explicit order that is retained when more nodes are appended.
@@ -89,7 +89,7 @@ This changes conversation history only. Files remain workspace-global and are no
 
 The Host half registers a private trusted-host Connection RPC under `/dsh-git`. A project-page request carries only the Workspace id. The Host resolves that Workspace's accounted Session ids, reads their complete canonical logs through `sessionQuery`, and returns normalized completed PA records with start/completion times, fork-seed boundaries, and content fingerprints. Open turns are never returned.
 
-The browser combines that response with its existing semantic graph. Known dsh-git merge nodes retain their exact multi-parent and Context metadata. Ordinary fork seeds reuse their unique source PA fingerprint; ambiguous old copied turns remain distinct instead of guessing an incorrect edge.
+The browser combines that response with its existing semantic graph. Known dsh-git merge nodes retain their exact multi-parent and Context metadata. For an ordinary official fork, inherited turns reuse the proven parent lineage and only the terminal copied PA is rendered as a sibling `PA<n> fork` alias; the first genuinely new PA continues beneath it. Ambiguous old copied turns remain distinct instead of guessing an incorrect edge.
 
 DeepSeek Harness does not currently expose project-row action or project-page slots. The project button and main-column takeover therefore live in one compatibility bridge that uses semantic DOM attributes and a `MutationObserver`. A future Harness sidebar DOM change may require updating that adapter; the PA data protocol and graph page are independent of it.
 
