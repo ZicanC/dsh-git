@@ -19,7 +19,11 @@ const HOST_EXTERNALS = [
   '@deepseek-ai/dsh-commands',
   '@deepseek-ai/dsh-session',
   '@deepseek-ai/dsh-session-query',
+  '@deepseek-ai/dsh-storage',
+  '@deepseek-ai/dsh-storage-domain',
   '@deepseek-ai/dsh-workspace',
+  // Host-only: the ledger schemas never reach the browser bundle.
+  'zod',
 ]
 
 const node: UserConfig = {

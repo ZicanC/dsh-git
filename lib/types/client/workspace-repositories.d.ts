@@ -1,19 +1,20 @@
 /** Resolve one persistent conversation graph per Workspace folder. */
 import type { IWorkspaces } from '@deepseek-ai/dsh-client-runtime/client';
+import type { GraphTransport } from './graph-transport.ts';
 import { GraphRepository } from './repository.ts';
-import type { GraphState } from './types.ts';
-interface BrowserStorage {
-    getItem(key: string): string | null;
-    setItem(key: string, value: string): void;
-}
-/** Owns isolated graph ledgers and resolves the ledger for each Session. */
+/**
+ * Owns isolated graph ledgers and resolves the ledger for each Session.
+ *
+ * A scope id is the Host record key, so it must stay stable across sessions and
+ * browsers: `workspace:<id>` for a folder member, `session:<id>` for a Session
+ * that belongs to no folder.
+ */
 export declare class WorkspaceGraphRepositories {
     private readonly workspaces;
-    private readonly storage?;
+    private readonly transport?;
     private readonly repositories;
     private readonly pendingSessionScopes;
-    private readonly legacyState;
-    constructor(workspaces: Pick<IWorkspaces, 'list'>, storage?: BrowserStorage | undefined);
+    constructor(workspaces: Pick<IWorkspaces, 'list'>, transport?: GraphTransport | undefined);
     /** Return the ledger owned by exactly one Workspace folder. */
     forWorkspace(workspaceId: string): GraphRepository;
     /** Resolve a Session through current Workspace membership, never through a global ledger. */
@@ -22,6 +23,3 @@ export declare class WorkspaceGraphRepositories {
     pinSession(sessionId: string, repository: GraphRepository): void;
     private forScope;
 }
-/** Partition the old global ledger without retaining cross-folder nodes or edges. */
-export declare function graphStateForSessions(state: GraphState, sessionIds: readonly string[]): GraphState;
-export {};

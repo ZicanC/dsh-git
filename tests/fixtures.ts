@@ -1,4 +1,26 @@
-import type { GraphState, TurnNode } from '../src/client/types.ts'
+import type { GraphTransport } from '../src/client/graph-transport.ts'
+import { EMPTY_GRAPH_STATE, type GraphState, type TurnNode } from '../src/client/types.ts'
+
+/** In-process stand-in for the Host ledger; `reads`/`writes` count RPC traffic. */
+export class MemoryTransport implements GraphTransport {
+  readonly scopes = new Map<string, GraphState>()
+  reads = 0
+  writes = 0
+
+  constructor(seed: Readonly<Record<string, GraphState>> = {}) {
+    for (const [scope, state] of Object.entries(seed)) this.scopes.set(scope, state)
+  }
+
+  async read(scopeId: string): Promise<GraphState> {
+    this.reads += 1
+    return this.scopes.get(scopeId) ?? EMPTY_GRAPH_STATE
+  }
+
+  async write(scopeId: string, state: GraphState): Promise<void> {
+    this.writes += 1
+    this.scopes.set(scopeId, state)
+  }
+}
 
 export function node(overrides: Partial<TurnNode> & Pick<TurnNode, 'id'>): TurnNode {
   return {

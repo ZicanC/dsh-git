@@ -1,5 +1,6 @@
 import { Session, SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { SessionLogSnapshot } from '@deepseek-ai/dsh-session-query'
+import { mergeLineageEvent } from './merge-lineage.ts'
 import type { HistoryTurnSource } from './protocol.ts'
 
 const COPIED_EVENT_TYPES = new Set([
@@ -113,7 +114,13 @@ export function appendHistoricalTurn(
   }
 }
 
-/** Read selected turns in tray order and produce a contiguous, balanced Agent seed. */
+/**
+ * Read selected turns in tray order and produce a contiguous, balanced Agent seed.
+ *
+ * The seed closes with the log-only `dsh-git/merge` lineage event, appended
+ * directly rather than through `Session.append` because only a seed event may
+ * carry `ignorable` (see `./merge-lineage.ts`).
+ */
 export async function buildMergedSessionSeed(
   targetSessionId: string,
   sources: readonly HistoryTurnSource[],
@@ -124,5 +131,7 @@ export async function buildMergedSessionSeed(
     const snapshot = await readSession(SessionId(source.sourceSessionId))
     appendHistoricalTurn(target, sourceTurnEvents(snapshot, source), index + 1)
   }
-  return target.events
+  const events = [...target.events]
+  events.push(mergeLineageEvent(sources, events.length, Date.now()))
+  return events
 }

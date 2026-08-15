@@ -1,32 +1,11 @@
 import { primaryPath } from './graph.ts'
+import type { GraphTransport } from './graph-transport.ts'
+import { EMPTY_GRAPH_STATE } from './types.ts'
 import type {
   BranchId, GraphState, ImportedTurn, PrepareBranchInput, TurnNode, TurnNodeId,
 } from './types.ts'
 
-const STORAGE_KEY = 'dsh-git.graph.v1'
-
-function storageKey(scopeId?: string): string {
-  return scopeId === undefined
-    ? STORAGE_KEY
-    : `${STORAGE_KEY}.workspace.${encodeURIComponent(scopeId)}`
-}
-
-const EMPTY_STATE: GraphState = {
-  format: 1,
-  nodes: {},
-  branches: {},
-  sessionBranches: {},
-  sessionTurnRefs: {},
-  pendingMerges: {},
-  headNodeId: null,
-  previewNodeId: null,
-  contextManifest: [],
-}
-
-interface BrowserStorage {
-  getItem(key: string): string | null
-  setItem(key: string, value: string): void
-}
+const EMPTY_STATE = EMPTY_GRAPH_STATE
 
 function id(prefix: string): string {
   const suffix = globalThis.crypto?.randomUUID?.()
@@ -42,39 +21,30 @@ function officialForkNodeId(sessionId: string, turn: number): TurnNodeId {
   return `fork-${encodeURIComponent(sessionId)}-${turn}`
 }
 
-function parseState(raw: string | null): GraphState {
-  if (raw === null) return EMPTY_STATE
-  try {
-    const value = JSON.parse(raw) as Partial<GraphState>
-    if (value.format !== 1 || value.nodes === undefined || value.branches === undefined) return EMPTY_STATE
-    return {
-      ...EMPTY_STATE,
-      ...value,
-      contextManifest: Array.isArray(value.contextManifest) ? value.contextManifest : [],
-    }
-  } catch {
-    return EMPTY_STATE
-  }
-}
-
-/** Persistent observable owning the browser-side conversation DAG. */
+/**
+ * Observable owning one scope's conversation DAG, durable on the Host.
+ *
+ * Reads stay synchronous — React subscribes through `useSyncExternalStore` —
+ * so every mutation lands in memory first and is pushed to the Host after.
+ * Until {@link hydrate} resolves the repository holds the empty ledger and
+ * defers mutations rather than applying them, because a `syncSession` that ran
+ * against the empty state would mint fresh node ids for turns the Host already
+ * knows and then overwrite the stored ledger with the duplicates.
+ */
 export class GraphRepository {
-  private state: GraphState
+  private state: GraphState = EMPTY_STATE
   private readonly listeners = new Set<() => void>()
-  private readonly storageKey: string
+  private hydrated = false
+  private deferred: Array<() => void> = []
 
   /**
-   * @param storage - browser storage; omitted keeps an in-memory repository.
-   * @param scopeId - one Workspace-folder id; omitted preserves the standalone repository API.
-   * @param fallbackState - one-time seed used only when the scoped key does not exist yet.
+   * @param transport - Host ledger access; omitted keeps an in-memory repository
+   *   that is hydrated from the start (used by tests and by a Host that has not
+   *   loaded the plugin's storage domain).
+   * @param scopeId - the ledger's owning scope; omitted with a transport is invalid.
    */
-  constructor(private readonly storage?: BrowserStorage, scopeId?: string, fallbackState?: GraphState) {
-    this.storageKey = storageKey(scopeId)
-    const raw = storage?.getItem(this.storageKey) ?? null
-    this.state = raw === null && fallbackState !== undefined ? fallbackState : parseState(raw)
-    if (raw === null && fallbackState !== undefined) {
-      storage?.setItem(this.storageKey, JSON.stringify(fallbackState))
-    }
+  constructor(private readonly transport?: GraphTransport, private readonly scopeId?: string) {
+    this.hydrated = transport === undefined || scopeId === undefined
   }
 
   /** Return the stable snapshot until the next mutation. */
@@ -86,14 +56,51 @@ export class GraphRepository {
     return () => { this.listeners.delete(listener) }
   }
 
+  /** True once the Host ledger has landed and mutations apply immediately. */
+  get ready(): boolean { return this.hydrated }
+
+  /**
+   * Load this scope's stored ledger once, then release any deferred mutations.
+   *
+   * A failed read still opens the gate: the graph rebuilds itself from the
+   * session logs the browser is already displaying, which is a better outcome
+   * than a permanently frozen tab.
+   */
+  async hydrate(): Promise<void> {
+    if (this.hydrated || this.transport === undefined || this.scopeId === undefined) return
+    let loaded = EMPTY_STATE
+    try {
+      loaded = await this.transport.read(this.scopeId)
+    } finally {
+      this.hydrated = true
+      this.state = loaded
+      const pending = this.deferred
+      this.deferred = []
+      for (const mutation of pending) mutation()
+      for (const listener of this.listeners) listener()
+    }
+  }
+
+  /** Apply one mutation now, or hold it until the Host ledger has landed. */
+  private run(mutation: () => void): void {
+    if (this.hydrated) mutation()
+    else this.deferred.push(mutation)
+  }
+
   private commit(next: GraphState): void {
     this.state = next
-    this.storage?.setItem(this.storageKey, JSON.stringify(next))
+    if (this.transport !== undefined && this.scopeId !== undefined) {
+      void this.transport.write(this.scopeId, next).catch(() => undefined)
+    }
     for (const listener of this.listeners) listener()
   }
 
   /** Import completed turns from the currently viewed DSH session. */
   syncSession(sessionId: string, turns: readonly ImportedTurn[]): void {
+    this.run(() => { this.syncSessionNow(sessionId, turns) })
+  }
+
+  private syncSessionNow(sessionId: string, turns: readonly ImportedTurn[]): void {
     let next = this.state
     const knownRefs = { ...(next.sessionTurnRefs[sessionId] ?? {}) }
     let branchId = next.sessionBranches[sessionId]
@@ -178,6 +185,10 @@ export class GraphRepository {
 
   /** Collapse browser-imported copies from ordinary Host forks into one labeled fork point. */
   reconcileOfficialForks(parents: Readonly<Record<string, string>>): void {
+    this.run(() => { this.reconcileOfficialForksNow(parents) })
+  }
+
+  private reconcileOfficialForksNow(parents: Readonly<Record<string, string>>): void {
     let next = this.state
     for (const [childSessionId, parentSessionId] of Object.entries(parents)) {
       if (childSessionId.startsWith('dsh-git-')) continue
@@ -271,6 +282,10 @@ export class GraphRepository {
 
   /** Record an auto-created child session before its first merged request completes. */
   prepareBranch(input: PrepareBranchInput): void {
+    this.run(() => { this.prepareBranchNow(input) })
+  }
+
+  private prepareBranchNow(input: PrepareBranchInput): void {
     const inherited: Record<number, TurnNodeId> = {}
     for (const [index, nodeId] of distinct(input.importedNodeIds).entries()) {
       if (this.state.nodes[nodeId] !== undefined) inherited[index + 1] = nodeId
@@ -307,68 +322,80 @@ export class GraphRepository {
 
   /** Remove a pending merge after a rejected prompt. */
   abortPending(sessionId: string): void {
-    if (this.state.pendingMerges[sessionId] === undefined) return
-    const pendingMerges = { ...this.state.pendingMerges }
-    delete pendingMerges[sessionId]
-    this.commit({ ...this.state, pendingMerges })
+    this.run(() => {
+      if (this.state.pendingMerges[sessionId] === undefined) return
+      const pendingMerges = { ...this.state.pendingMerges }
+      delete pendingMerges[sessionId]
+      this.commit({ ...this.state, pendingMerges })
+    })
   }
 
   /** Toggle one node in the context tray; additions restore creation-time order. */
   toggleContext(nodeId: TurnNodeId): void {
-    if (this.state.nodes[nodeId] === undefined) return
-    const selected = new Set(this.state.contextManifest)
-    if (selected.has(nodeId)) {
-      selected.delete(nodeId)
-      this.commit({ ...this.state, contextManifest: this.state.contextManifest.filter(id => selected.has(id)) })
-      return
-    }
-    const currentlyChronological = this.state.contextManifest.every((id, index, values) =>
-      index === 0
-      || this.state.nodes[values[index - 1]!]!.createdAt <= this.state.nodes[id]!.createdAt)
-    const contextManifest = currentlyChronological
-      ? [...selected, nodeId].sort((left, right) =>
-        this.state.nodes[left]!.createdAt - this.state.nodes[right]!.createdAt)
-      : [...this.state.contextManifest, nodeId]
-    this.commit({ ...this.state, contextManifest })
+    this.run(() => {
+      if (this.state.nodes[nodeId] === undefined) return
+      const selected = new Set(this.state.contextManifest)
+      if (selected.has(nodeId)) {
+        selected.delete(nodeId)
+        this.commit({ ...this.state, contextManifest: this.state.contextManifest.filter(id => selected.has(id)) })
+        return
+      }
+      const currentlyChronological = this.state.contextManifest.every((id, index, values) =>
+        index === 0
+        || this.state.nodes[values[index - 1]!]!.createdAt <= this.state.nodes[id]!.createdAt)
+      const contextManifest = currentlyChronological
+        ? [...selected, nodeId].sort((left, right) =>
+          this.state.nodes[left]!.createdAt - this.state.nodes[right]!.createdAt)
+        : [...this.state.contextManifest, nodeId]
+      this.commit({ ...this.state, contextManifest })
+    })
   }
 
   /** Remove all nodes from the next-request tray. */
   clearContext(): void {
-    this.commit({ ...this.state, contextManifest: [] })
+    this.run(() => { this.commit({ ...this.state, contextManifest: [] }) })
   }
 
   /** Move one selected node before another selected node. */
   moveContext(nodeId: TurnNodeId, beforeId: TurnNodeId): void {
-    if (nodeId === beforeId) return
-    const next = this.state.contextManifest.filter(id => id !== nodeId)
-    const index = next.indexOf(beforeId)
-    if (index < 0 || !this.state.contextManifest.includes(nodeId)) return
-    next.splice(index, 0, nodeId)
-    this.commit({ ...this.state, contextManifest: next })
+    this.run(() => {
+      if (nodeId === beforeId) return
+      const next = this.state.contextManifest.filter(id => id !== nodeId)
+      const index = next.indexOf(beforeId)
+      if (index < 0 || !this.state.contextManifest.includes(nodeId)) return
+      next.splice(index, 0, nodeId)
+      this.commit({ ...this.state, contextManifest: next })
+    })
   }
 
   /** Move one selected node to the end of the tray. */
   moveContextToEnd(nodeId: TurnNodeId): void {
-    if (!this.state.contextManifest.includes(nodeId)) return
-    this.commit({
-      ...this.state,
-      contextManifest: [...this.state.contextManifest.filter(id => id !== nodeId), nodeId],
+    this.run(() => {
+      if (!this.state.contextManifest.includes(nodeId)) return
+      this.commit({
+        ...this.state,
+        contextManifest: [...this.state.contextManifest.filter(id => id !== nodeId), nodeId],
+      })
     })
   }
 
   /** Change only the preview selection. */
   preview(nodeId: TurnNodeId): void {
-    if (this.state.nodes[nodeId] !== undefined) this.commit({ ...this.state, previewNodeId: nodeId })
+    this.run(() => {
+      if (this.state.nodes[nodeId] !== undefined) this.commit({ ...this.state, previewNodeId: nodeId })
+    })
   }
 
   /** Rename a branch in the graph ledger. */
   renameBranch(branchId: BranchId, name: string): void {
-    const branch = this.state.branches[branchId]
-    const normalized = name.trim()
-    if (branch === undefined || normalized === '') return
-    this.commit({
-      ...this.state,
-      branches: { ...this.state.branches, [branchId]: { ...branch, name: normalized } },
+    this.run(() => {
+      const branch = this.state.branches[branchId]
+      const normalized = name.trim()
+      if (branch === undefined || normalized === '') return
+      this.commit({
+        ...this.state,
+        branches: { ...this.state.branches, [branchId]: { ...branch, name: normalized } },
+      })
     })
   }
 }

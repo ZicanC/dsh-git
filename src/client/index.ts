@@ -3,6 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ISessions, SessionBinding, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { GraphView, type GraphViewInjected } from './GraphView.tsx'
+import { connectionGraphTransport } from './graph-transport.ts'
 import { installProjectBridge } from './project-bridge.tsx'
 import { WorkspaceGraphRepositories } from './workspace-repositories.ts'
 import { STYLES } from './styles.ts'
@@ -49,7 +50,7 @@ export function apply(ctx: Context): void {
   const sessions = ctx.sessions as unknown as ISessions
   const repositories = new WorkspaceGraphRepositories(
     ctx.workspaces,
-    typeof localStorage === 'undefined' ? undefined : localStorage,
+    connectionGraphTransport(ctx.connection),
   )
   ctx.effect(() => installLocaleSource(ctx.locale), 'dsh-git: locale source')
   ctx.effect(installStyles, 'dsh-git: stylesheet')

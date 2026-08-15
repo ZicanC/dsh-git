@@ -1,12 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { GraphRepository } from '../src/client/repository.ts'
 import { nodeLabelMap } from '../src/client/labels.ts'
-
-class MemoryStorage {
-  value: string | null = null
-  getItem(): string | null { return this.value }
-  setItem(_key: string, value: string): void { this.value = value }
-}
+import { MemoryTransport } from './fixtures.ts'
 
 const turn = (number: number, createdAt = number * 10) => ({
   turn: number,
@@ -17,9 +12,10 @@ const turn = (number: number, createdAt = number * 10) => ({
 })
 
 describe('GraphRepository', () => {
-  it('imports a linear session and seeds the tray with the primary path', () => {
-    const storage = new MemoryStorage()
-    const repository = new GraphRepository(storage)
+  it('imports a linear session and seeds the tray with the primary path', async () => {
+    const transport = new MemoryTransport()
+    const repository = new GraphRepository(transport, 'workspace:one')
+    await repository.hydrate()
     repository.syncSession('s1', [turn(1), turn(2)])
 
     const state = repository.getSnapshot()
@@ -29,7 +25,37 @@ describe('GraphRepository', () => {
     expect(second.parentIds).toEqual([first.id])
     expect(second.contextManifest).toEqual([first.id])
     expect(state.contextManifest).toEqual([first.id, second.id])
-    expect(storage.value).toContain('sessionTurnRefs')
+    expect(transport.scopes.get('workspace:one')).toEqual(state)
+  })
+
+  it('defers mutations until the Host ledger lands and never mints duplicate nodes', async () => {
+    const seeded = new GraphRepository()
+    seeded.syncSession('s1', [turn(1), turn(2)])
+    const stored = seeded.getSnapshot()
+    const transport = new MemoryTransport({ 'workspace:one': stored })
+
+    const repository = new GraphRepository(transport, 'workspace:one')
+    // The view renders and syncs before the ledger has arrived.
+    repository.syncSession('s1', [turn(1), turn(2)])
+    expect(repository.ready).toBe(false)
+    expect(Object.keys(repository.getSnapshot().nodes)).toHaveLength(0)
+
+    await repository.hydrate()
+    const state = repository.getSnapshot()
+    expect(Object.keys(state.nodes)).toHaveLength(2)
+    expect(state.sessionTurnRefs.s1![1]).toBe(stored.sessionTurnRefs.s1![1])
+    expect(state.sessionTurnRefs.s1![2]).toBe(stored.sessionTurnRefs.s1![2])
+  })
+
+  it('opens the gate and rebuilds from the session log when the Host read fails', async () => {
+    const transport = new MemoryTransport()
+    transport.read = async () => { throw new Error('connection lost') }
+    const repository = new GraphRepository(transport, 'workspace:one')
+    repository.syncSession('s1', [turn(1)])
+
+    await expect(repository.hydrate()).rejects.toThrow('connection lost')
+    expect(repository.ready).toBe(true)
+    expect(Object.keys(repository.getSnapshot().nodes)).toHaveLength(1)
   })
 
   it('keeps a manual tray order when another node is selected', () => {

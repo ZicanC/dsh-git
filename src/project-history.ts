@@ -2,6 +2,7 @@
 import { createHash } from 'node:crypto'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { SessionLogSnapshot } from '@deepseek-ai/dsh-session-query'
+import { readMergeLineage } from './merge-lineage.ts'
 import type { ProjectSessionDTO, ProjectTurnDTO } from './protocol.ts'
 
 interface TextBlock {
@@ -71,11 +72,13 @@ export function projectTurns(snapshot: SessionLogSnapshot): readonly ProjectTurn
 
 /** Convert one complete Session snapshot into the project graph wire record. */
 export function projectSession(snapshot: SessionLogSnapshot): ProjectSessionDTO {
+  const lineage = readMergeLineage(snapshot.events)
   return {
     sessionId: snapshot.session.id,
     createdAt: snapshot.session.createdAt,
     ...(snapshot.session.parentSession === undefined ? {} : { parentSessionId: snapshot.session.parentSession }),
     seedLength: snapshot.session.seedLength ?? 0,
+    ...(lineage === undefined ? {} : { mergeSources: lineage.sources }),
     turns: projectTurns(snapshot),
   }
 }

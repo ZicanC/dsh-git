@@ -3,5 +3,11 @@ import type { SessionLogSnapshot } from '@deepseek-ai/dsh-session-query';
 import type { HistoryTurnSource } from './protocol.ts';
 /** Copy one completed source turn into a detached target as a newly numbered real turn. */
 export declare function appendHistoricalTurn(target: Session, sourceEvents: readonly SessionEvent[], targetTurn: number): void;
-/** Read selected turns in tray order and produce a contiguous, balanced Agent seed. */
+/**
+ * Read selected turns in tray order and produce a contiguous, balanced Agent seed.
+ *
+ * The seed closes with the log-only `dsh-git/merge` lineage event, appended
+ * directly rather than through `Session.append` because only a seed event may
+ * carry `ignorable` (see `./merge-lineage.ts`).
+ */
 export declare function buildMergedSessionSeed(targetSessionId: string, sources: readonly HistoryTurnSource[], readSession: (sessionId: ReturnType<typeof SessionId>) => Promise<SessionLogSnapshot>): Promise<readonly SessionEvent[]>;

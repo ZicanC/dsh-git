@@ -5,20 +5,28 @@ import { resolveSessionPreset } from '@deepseek-ai/dsh-agent-presets'
 import type {} from '@deepseek-ai/dsh-commands'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-query'
+import type {} from '@deepseek-ai/dsh-storage-domain'
 import type {} from '@deepseek-ai/dsh-workspace'
 import type {} from './connection-contract.ts'
+import { GRAPH_DOMAIN, assertScopeId, graphStateSchema } from './graph-domain.ts'
 import { buildMergedSessionSeed } from './history.ts'
 import { projectSession } from './project-history.ts'
 import {
   CREATE_MERGED_SESSION_COMMAND,
+  GRAPH_READ_ENDPOINT,
+  GRAPH_WRITE_ENDPOINT,
   PROJECT_GRAPH_RPC_CHANNEL,
   PROJECT_GRAPH_RPC_ENDPOINT,
   decodeCreateMergedSessionPayload,
+  decodeGraphReadRequest,
+  decodeGraphWriteRequest,
   decodeProjectGraphRequest,
 } from './protocol.ts'
 
 export const name = 'dsh-git'
-export const inject = ['agents', 'agentPresets', 'commands', 'connection', 'sessionQuery', 'workspaceRegistry']
+export const inject = [
+  'agents', 'agentPresets', 'commands', 'connection', 'sessionQuery', 'storageDomain', 'workspaceRegistry',
+]
 
 /** Repair merge sessions created by versions that copied cwd but forgot Workspace membership. */
 async function repairWorkspaceMembership(ctx: Context): Promise<void> {
@@ -41,41 +49,56 @@ async function repairWorkspaceMembership(ctx: Context): Promise<void> {
   }
 }
 
+/** Report one handler failure without leaking a stack across the Connection boundary. */
+function failure(error: unknown): { ok: false; error: { code: string; message: string; details: object } } {
+  return {
+    ok: false,
+    error: { code: 'internal', message: error instanceof Error ? error.message : String(error), details: {} },
+  }
+}
+
 /** Mount the private history-composition command used by the browser half. */
 export async function apply(ctx: Context): Promise<void> {
   await repairWorkspaceMembership(ctx)
-  ctx.connection.rpc.handle(PROJECT_GRAPH_RPC_CHANNEL, async (endpoint, payload) => {
-    if (endpoint !== PROJECT_GRAPH_RPC_ENDPOINT) {
-      return { ok: false, error: { code: 'internal', message: `unknown dsh-git endpoint "${endpoint}"`, details: {} } }
-    }
-    let request
-    try {
-      request = decodeProjectGraphRequest(payload)
-    } catch (error: unknown) {
-      return {
-        ok: false,
-        error: { code: 'internal', message: error instanceof Error ? error.message : String(error), details: {} },
-      }
-    }
+  const domain = await ctx.storageDomain.open(GRAPH_DOMAIN)
+  const scopes = domain.table('scopes')
+  ctx.effect(() => () => domain.close(), 'dsh-git: graph ledger domain')
+
+  /** Read every completed PA of one Workspace straight from the canonical logs. */
+  const readProjectGraph = async (payload: unknown): Promise<{ ok: true; value: unknown }> => {
+    const request = decodeProjectGraphRequest(payload)
     const workspace = ctx.workspaceRegistry.list()
       .find(candidate => candidate.id === request.workspaceId)
-    if (workspace === undefined) {
-      return {
-        ok: false,
-        error: { code: 'internal', message: `workspace "${request.workspaceId}" was not found`, details: {} },
-      }
-    }
+    if (workspace === undefined) throw new Error(`workspace "${request.workspaceId}" was not found`)
+    const sessions = await Promise.all(workspace.sessionIds.map(async sessionId =>
+      projectSession(await ctx.sessionQuery.readSession(SessionId(sessionId)))))
+    sessions.sort((left, right) => left.createdAt - right.createdAt
+      || left.sessionId.localeCompare(right.sessionId))
+    return { ok: true, value: { workspaceId: request.workspaceId, sessions } }
+  }
+
+  ctx.connection.rpc.handle(PROJECT_GRAPH_RPC_CHANNEL, async (endpoint, payload) => {
     try {
-      const sessions = await Promise.all(workspace.sessionIds.map(async sessionId =>
-        projectSession(await ctx.sessionQuery.readSession(SessionId(sessionId)))))
-      sessions.sort((left, right) => left.createdAt - right.createdAt
-        || left.sessionId.localeCompare(right.sessionId))
-      return { ok: true, value: { workspaceId: request.workspaceId, sessions } }
-    } catch (error: unknown) {
-      return {
-        ok: false,
-        error: { code: 'internal', message: error instanceof Error ? error.message : String(error), details: {} },
+      switch (endpoint) {
+        case PROJECT_GRAPH_RPC_ENDPOINT:
+          return await readProjectGraph(payload)
+        case GRAPH_READ_ENDPOINT: {
+          const scopeId = assertScopeId(decodeGraphReadRequest(payload).scopeId)
+          return { ok: true, value: { scopeId, state: scopes.get(scopeId) ?? null } }
+        }
+        case GRAPH_WRITE_ENDPOINT: {
+          const request = decodeGraphWriteRequest(payload)
+          const scopeId = assertScopeId(request.scopeId)
+          // Parse before `put` so a malformed ledger is rejected at the seam,
+          // not by the domain's own boundary check after the call is in flight.
+          await scopes.put(scopeId, graphStateSchema.parse(request.state))
+          return { ok: true, value: { scopeId } }
+        }
+        default:
+          throw new Error(`unknown dsh-git endpoint "${endpoint}"`)
       }
+    } catch (error: unknown) {
+      return failure(error)
     }
   }, { authority: 'trusted-host' })
   ctx.commands.register({

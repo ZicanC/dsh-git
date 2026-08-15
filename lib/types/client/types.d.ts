@@ -1,7 +1,6 @@
-/** Stable id of one Prompt + Answer turn in the conversation DAG. */
-export type TurnNodeId = string;
-/** Stable id of one visual branch. */
-export type BranchId = string;
+export type { BranchId, ConversationBranch, GraphState, PendingMerge, TurnNode, TurnNodeId, } from '../graph-state.ts';
+export { EMPTY_GRAPH_STATE } from '../graph-state.ts';
+import type { TurnNodeId } from '../graph-state.ts';
 /** One extracted completed DSH turn. */
 export interface ImportedTurn {
     readonly turn: number;
@@ -9,51 +8,6 @@ export interface ImportedTurn {
     readonly answer: string;
     readonly createdAt: number;
     readonly boundarySeq: number;
-}
-/** One immutable Prompt + Answer commit in the conversation DAG. */
-export interface TurnNode {
-    readonly id: TurnNodeId;
-    readonly sessionId: string;
-    readonly turn: number;
-    readonly prompt: string;
-    readonly answer: string;
-    readonly createdAt: number;
-    readonly boundarySeq: number;
-    readonly primaryParentId: TurnNodeId | null;
-    readonly parentIds: readonly TurnNodeId[];
-    readonly contextManifest: readonly TurnNodeId[];
-    readonly branchId: BranchId;
-    /** Visual copy of the source PA at which an ordinary Harness fork begins. */
-    readonly forkSourceId?: TurnNodeId;
-}
-/** One named branch and its latest completed node. */
-export interface ConversationBranch {
-    readonly id: BranchId;
-    readonly name: string;
-    readonly sessionId: string;
-    readonly headId: TurnNodeId | null;
-    readonly color: number;
-    readonly createdAt: number;
-}
-/** Pending merge metadata retained until the child session completes its first new turn. */
-export interface PendingMerge {
-    readonly branchId: BranchId;
-    readonly parentIds: readonly TurnNodeId[];
-    readonly primaryParentId: TurnNodeId | null;
-    readonly contextManifest: readonly TurnNodeId[];
-    readonly prompt: string;
-}
-/** Durable browser state of the graph and next-request tray. */
-export interface GraphState {
-    readonly format: 1;
-    readonly nodes: Readonly<Record<TurnNodeId, TurnNode>>;
-    readonly branches: Readonly<Record<BranchId, ConversationBranch>>;
-    readonly sessionBranches: Readonly<Record<string, BranchId>>;
-    readonly sessionTurnRefs: Readonly<Record<string, Readonly<Record<number, TurnNodeId>>>>;
-    readonly pendingMerges: Readonly<Record<string, PendingMerge>>;
-    readonly headNodeId: TurnNodeId | null;
-    readonly previewNodeId: TurnNodeId | null;
-    readonly contextManifest: readonly TurnNodeId[];
 }
 /** Inputs for preparing an automatically forked merge branch. */
 export interface PrepareBranchInput {
