@@ -208,6 +208,7 @@ describe('HistoryRail presentation', () => {
     expect(rows[1]?.getAttribute('data-branched')).toBe('')
     expect(view.container.querySelectorAll('.dsh-git-rail-dash')).toHaveLength(0)
     expect(view.container.querySelectorAll('.dsh-git-rail-expanded-preview')).toHaveLength(1)
+    expect(STYLES).toContain('.dsh-git-rail-expanded-head{position:sticky;z-index:2;top:0;')
 
     fireEvent.pointerEnter(rows[1] as HTMLElement)
     const summary = screen.getByRole('tooltip')

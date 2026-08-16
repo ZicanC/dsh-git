@@ -159,8 +159,8 @@ export const STYLES = `
 .dsh-git-rail-tag{flex:none;color:var(--dsh-git-state-preview);font:400 11px/16px var(--dsw-font-family)}
 .dsh-git-rail-dash:focus-visible{outline:2px solid color-mix(in srgb,var(--dsh-git-rail-color) 38%,transparent);outline-offset:1px}
 .dsh-git-rail-expanded{z-index:2;box-sizing:border-box;width:auto;min-width:0;overflow:visible;background:var(--dsw-alias-bg-base);border-inline-end:1px solid var(--dsw-alias-border-l2)}
-.dsh-git-rail-expanded-scroll{height:100%;overflow:auto;padding-block:14px;scrollbar-width:thin}
-.dsh-git-rail-expanded-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 16px 10px;color:var(--dsw-alias-label-tertiary);font:400 12px/16px var(--dsw-font-family)}
+.dsh-git-rail-expanded-scroll{height:100%;overflow:auto;scrollbar-width:thin}
+.dsh-git-rail-expanded-head{position:sticky;z-index:2;top:0;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px 10px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-tertiary);font:400 12px/16px var(--dsw-font-family)}
 .dsh-git-rail-expanded-list{margin:0;padding:0;list-style:none}
 .dsh-git-rail-expanded-list>li{margin:0;padding:0}
 .dsh-git-rail-expanded-row{--dsh-git-rail-color:var(--dsh-git-state-included);position:relative;box-sizing:border-box;width:100%;min-width:0;min-height:42px;padding:9px 16px 9px calc(14px + var(--dsh-git-rail-indent,0) * 18px);display:flex;align-items:center;gap:10px;border:0;border-inline-start:2px solid var(--dsh-git-rail-color);background:transparent;color:var(--dsw-alias-label-tertiary);text-align:start;cursor:pointer}
