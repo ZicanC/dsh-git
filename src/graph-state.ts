@@ -45,7 +45,8 @@ export interface PendingMerge {
   readonly parentIds: readonly TurnNodeId[]
   readonly primaryParentId: TurnNodeId | null
   readonly contextManifest: readonly TurnNodeId[]
-  readonly prompt: string
+  /** @deprecated Old format-1 ledgers may retain the prompt that created the merge. */
+  readonly prompt?: string | undefined
 }
 
 /**

@@ -100,6 +100,75 @@ describe('project graph assembly', () => {
     expect(model.nodes.merge?.contextManifest).toEqual(['two', 'one'])
   })
 
+  it('uses exact merge lineage instead of a same-fingerprint parent or candidate', () => {
+    const response: ProjectGraphResponse = {
+      workspaceId: 'w',
+      sessions: [
+        { sessionId: 'source-a', createdAt: 1, seedLength: 0, turns: [
+          turn({ turn: 1, fingerprint: 'duplicate', boundarySeq: 5 }),
+        ] },
+        { sessionId: 'source-b', createdAt: 2, seedLength: 0, turns: [
+          turn({ turn: 1, fingerprint: 'duplicate', boundarySeq: 9 }),
+        ] },
+        {
+          sessionId: 'merged', createdAt: 3, parentSessionId: 'source-b', seedLength: 10,
+          mergeSources: [
+            { sourceSessionId: 'source-a', sourceTurn: 1, sourceBoundarySeq: 5, targetTurn: 1 },
+            { sourceSessionId: 'source-b', sourceTurn: 1, sourceBoundarySeq: 9, targetTurn: 2 },
+          ],
+          turns: [
+            turn({ turn: 1, fingerprint: 'duplicate', boundarySeq: 4, inherited: true }),
+            turn({ turn: 2, fingerprint: 'duplicate', boundarySeq: 8, inherited: true }),
+            turn({ turn: 3, fingerprint: 'merged-answer', boundarySeq: 12 }),
+          ],
+        },
+      ],
+    }
+
+    const model = assembleProjectGraph(response, graph([]))
+    const sourceA = model.state.sessionTurnRefs['source-a']?.[1]
+    const sourceB = model.state.sessionTurnRefs['source-b']?.[1]
+    expect(sourceA).toBeDefined()
+    expect(sourceB).toBeDefined()
+    expect(sourceA).not.toBe(sourceB)
+    expect(model.state.sessionTurnRefs.merged?.[1]).toBe(sourceA)
+    expect(model.state.sessionTurnRefs.merged?.[2]).toBe(sourceB)
+    expect(model.state.sessionTurnRefs.merged?.[1]).not.toBe(model.state.sessionTurnRefs.merged?.[2])
+    expect(Object.keys(model.nodes).some(id => id.startsWith('project-fork:merged:'))).toBe(false)
+
+    const firstOwn = model.nodes[model.state.sessionTurnRefs.merged?.[3] ?? '']!
+    expect(firstOwn.parentIds).toEqual([sourceA, sourceB])
+    expect(firstOwn.primaryParentId).toBe(sourceB)
+    expect(firstOwn.contextManifest).toEqual([sourceA, sourceB])
+  })
+
+  it('does not substitute a duplicate fingerprint when an exact merge boundary is stale', () => {
+    const response: ProjectGraphResponse = {
+      workspaceId: 'w',
+      sessions: [
+        { sessionId: 'source-a', createdAt: 1, seedLength: 0, turns: [
+          turn({ turn: 1, fingerprint: 'duplicate', boundarySeq: 5 }),
+        ] },
+        { sessionId: 'source-b', createdAt: 2, seedLength: 0, turns: [
+          turn({ turn: 1, fingerprint: 'duplicate', boundarySeq: 9 }),
+        ] },
+        {
+          sessionId: 'merged', createdAt: 3, parentSessionId: 'source-b', seedLength: 10,
+          mergeSources: [
+            { sourceSessionId: 'source-a', sourceTurn: 1, sourceBoundarySeq: 999, targetTurn: 1 },
+          ],
+          turns: [turn({ turn: 1, fingerprint: 'duplicate', boundarySeq: 4, inherited: true })],
+        },
+      ],
+    }
+
+    const model = assembleProjectGraph(response, graph([]))
+    const imported = model.state.sessionTurnRefs.merged?.[1]
+    expect(imported).toBe('project-pa:merged:1')
+    expect(imported).not.toBe(model.state.sessionTurnRefs['source-a']?.[1])
+    expect(imported).not.toBe(model.state.sessionTurnRefs['source-b']?.[1])
+  })
+
   it('reuses a merged parent prefix when an official fork has ambiguous content fingerprints', () => {
     const one = node({ id: 'one', sessionId: 'source', turn: 1, createdAt: 10 })
     const seven = node({ id: 'seven', sessionId: 'other', turn: 1, createdAt: 20 })
@@ -159,5 +228,46 @@ describe('project graph assembly', () => {
     expect(Object.keys(first.nodes)).toHaveLength(1)
     expect(Object.values(first.nodes)[0]?.parentIds).toEqual([])
     expect(Object.keys(projectGraphAt(model, 2).nodes)).toHaveLength(2)
+  })
+
+  it('keeps locally completed turns that arrived after the project RPC snapshot', () => {
+    const localOne = node({
+      id: 'local-one', sessionId: 'current', turn: 1, createdAt: 10, boundarySeq: 5,
+    })
+    const localTwo = node({
+      id: 'local-two', sessionId: 'current', turn: 2, createdAt: 30, boundarySeq: 10,
+      primaryParentId: 'local-one', parentIds: ['local-one'], contextManifest: ['local-one'],
+    })
+    const local = graph([localOne, localTwo], {
+      sessionTurnRefs: { current: { 1: 'local-one', 2: 'local-two' } },
+      sessionBranches: { current: 'branch-a' },
+      branches: {
+        'branch-a': {
+          id: 'branch-a', name: 'current', sessionId: 'current',
+          headId: 'local-two', color: 0, createdAt: 1,
+        },
+      },
+    })
+    const response: ProjectGraphResponse = {
+      workspaceId: 'w',
+      sessions: [{
+        sessionId: 'current', createdAt: 1, seedLength: 0,
+        turns: [turn({ turn: 1, fingerprint: 'one', boundarySeq: 5 })],
+      }],
+    }
+
+    const first = assembleProjectGraph(response, local)
+    expect(first.state.sessionTurnRefs.current).toEqual({ 1: 'local-one', 2: 'local-two' })
+    expect(first.nodes['local-two']).toMatchObject({
+      sessionId: 'current', turn: 2, primaryParentId: 'local-one', parentIds: ['local-one'],
+    })
+    expect(first.state.branches['project-branch:current']?.headId).toBe('local-two')
+    expect(first.timeline.filter(id => id === 'local-two')).toHaveLength(1)
+    expect(first.nodes['project-pa:current:2']).toBeUndefined()
+
+    // Reassembly after the observed graph is adopted remains idempotent.
+    const second = assembleProjectGraph(response, first.state)
+    expect(second.state.sessionTurnRefs.current).toEqual({ 1: 'local-one', 2: 'local-two' })
+    expect(second.timeline.filter(id => id === 'local-two')).toHaveLength(1)
   })
 })

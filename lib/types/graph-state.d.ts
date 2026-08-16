@@ -40,7 +40,8 @@ export interface PendingMerge {
     readonly parentIds: readonly TurnNodeId[];
     readonly primaryParentId: TurnNodeId | null;
     readonly contextManifest: readonly TurnNodeId[];
-    readonly prompt: string;
+    /** @deprecated Old format-1 ledgers may retain the prompt that created the merge. */
+    readonly prompt?: string | undefined;
 }
 /**
  * One scope's complete ledger: the DAG, its branches, and the view state.

@@ -4,10 +4,12 @@ import { nodeLabelMap } from './labels.ts'
 import { localized, useLocale } from './i18n.ts'
 import type { GraphState, TurnNodeId } from './types.ts'
 
-const NODE_WIDTH = 72
+// Nodes are readable text blocks, not chips: the accent lives on a 2px
+// inline-start bar, so the box itself has to carry a label at rest.
+const NODE_WIDTH = 132
 const NODE_HEIGHT = 42
-const HORIZONTAL_GAP = 28
-const VERTICAL_GAP = 78
+const HORIZONTAL_GAP = 24
+const VERTICAL_GAP = 58
 const STAGE_PADDING = 32
 
 interface TreePosition {
@@ -27,6 +29,12 @@ export interface GraphCanvasProps {
   readonly state: GraphState
   readonly previewNodeId: TurnNodeId | null
   readonly onPreview: (nodeId: TurnNodeId) => void
+  /** Optional committed selection. Supplying this enables selection semantics. */
+  readonly selectedNodeIds?: readonly TurnNodeId[]
+  /** Optional uncommitted node being previewed for addition. */
+  readonly candidateNodeId?: TurnNodeId | null
+  /** Make node inspection inert while a merge transaction is in flight. */
+  readonly disabled?: boolean
   /** Optional project-level PA labels ordered by completion time. */
   readonly labels?: ReadonlyMap<TurnNodeId, string>
   /** Optional stable color index per project Session. */
@@ -105,7 +113,8 @@ function connector(parent: TreePosition, child: TreePosition): string {
 
 /** Compact tree visualization: node details are intentionally kept out of the graph. */
 export function GraphCanvas({
-  state, previewNodeId, onPreview, labels: suppliedLabels, nodeColors, fit = true,
+  state, previewNodeId, onPreview, selectedNodeIds, candidateNodeId, disabled = false,
+  labels: suppliedLabels, nodeColors, fit = true,
 }: GraphCanvasProps) {
   const locale = useLocale()
   const viewportRef = useRef<HTMLDivElement>(null)
@@ -116,6 +125,8 @@ export function GraphCanvas({
   const byId = useMemo(() => new Map(layout.positions.map(position => [position.nodeId, position])), [layout])
   const activePath = useMemo(() => new Set(primaryPath(state, state.headNodeId)), [state])
   const context = new Set(state.contextManifest)
+  const selectedNodes = useMemo(() => new Set(selectedNodeIds ?? []), [selectedNodeIds])
+  const selectionMode = selectedNodeIds !== undefined || candidateNodeId !== undefined
 
   useEffect(() => {
     const element = viewportRef.current
@@ -167,9 +178,13 @@ export function GraphCanvas({
         const isHead = node.id === state.headNodeId
         const isPreview = node.id === previewNodeId
         const inContext = context.has(node.id)
+        const isSelected = selectedNodes.has(node.id)
+        const isCandidate = !isSelected && node.id === candidateNodeId
+        const selectionState = isSelected ? 'selected' : isCandidate ? 'candidate' : 'unselected'
         return <button
           type="button"
-          className={`dsh-git-tree-node ${isPreview ? 'dsh-git-tree-node-preview' : ''} ${inContext ? 'dsh-git-tree-node-context' : ''}`}
+          disabled={disabled}
+          className={`dsh-git-tree-node ${isPreview ? 'dsh-git-tree-node-preview' : ''} ${inContext ? 'dsh-git-tree-node-context' : ''} ${isSelected ? 'dsh-git-tree-node-selected' : ''} ${isCandidate ? 'dsh-git-tree-node-candidate' : ''}`}
           style={{
             left: position.x - NODE_WIDTH / 2,
             top: position.y,
@@ -183,10 +198,16 @@ export function GraphCanvas({
           title={`${label}: ${node.prompt || localized('（无文字问题）', '(No text prompt)', locale)}`}
           aria-label={localized(`查看 ${label} context`, `View ${label} context`, locale)}
           aria-current={isHead ? 'true' : undefined}
+          aria-pressed={selectionMode ? (isSelected ? true : isCandidate ? 'mixed' : false) : undefined}
+          aria-controls={selectionMode ? 'dsh-git-pa-context-window' : undefined}
+          aria-expanded={selectionMode ? isPreview : undefined}
+          data-node-id={node.id}
+          data-selection-state={selectionMode ? selectionState : undefined}
           onClick={() => onPreview(node.id)}
         >
-          <span>{label}</span>
+          <span className="dsh-git-tree-node-label">{label}</span>
           {isHead ? <span className="dsh-git-tree-head">HEAD</span> : null}
+          {isCandidate ? <span className="dsh-git-tree-node-tag">{localized('预览', 'preview', locale)}</span> : null}
         </button>
       })}
       </div>

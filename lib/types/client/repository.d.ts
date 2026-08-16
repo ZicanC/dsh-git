@@ -1,5 +1,5 @@
 import type { GraphTransport } from './graph-transport.ts';
-import type { BranchId, GraphState, ImportedTurn, PrepareBranchInput, TurnNodeId } from './types.ts';
+import type { BranchId, GraphState, ImportedTurn, PrepareMergedSessionInput, TurnNodeId } from './types.ts';
 /**
  * Observable owning one scope's conversation DAG, durable on the Host.
  *
@@ -43,14 +43,23 @@ export declare class GraphRepository {
     private commit;
     /** Import completed turns from the currently viewed DSH session. */
     syncSession(sessionId: string, turns: readonly ImportedTurn[]): void;
+    /**
+     * Adopt a complete Host-observed Workspace graph without replacing local
+     * branch names, pending merge metadata, or transient view state.
+     *
+     * Project assembly reuses every known browser id before minting fallback
+     * ids, so this union also makes previously unopened Session turns available
+     * to a later merged child without duplicating them in the ledger.
+     */
+    adoptObservedGraph(observed: GraphState): void;
     private syncSessionNow;
     /** Collapse browser-imported copies from ordinary Host forks into one labeled fork point. */
     reconcileOfficialForks(parents: Readonly<Record<string, string>>): void;
     private reconcileOfficialForksNow;
-    /** Record an auto-created child session before its first merged request completes. */
-    prepareBranch(input: PrepareBranchInput): void;
-    private prepareBranchNow;
-    /** Remove a pending merge after a rejected prompt. */
+    /** Register a merged child Session before its first new official turn. */
+    prepareMergedSession(input: PrepareMergedSessionInput): void;
+    private prepareMergedSessionNow;
+    /** Remove pending metadata for an abandoned merged Session. */
     abortPending(sessionId: string): void;
     /** Toggle one node in the context tray; additions restore creation-time order. */
     toggleContext(nodeId: TurnNodeId): void;

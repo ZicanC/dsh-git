@@ -16,15 +16,12 @@ function ledger(): GraphState {
     { turn: 2, prompt: 'q2', answer: 'a2', createdAt: 20, boundarySeq: 9 },
   ])
   const refs = repository.getSnapshot().sessionTurnRefs.source!
-  repository.prepareBranch({
-    sourceSessionId: 'source',
+  repository.prepareMergedSession({
     childSessionId: 'child',
-    baseNodeId: refs[1]!,
     importedNodeIds: [refs[1]!, refs[2]!],
     parentIds: [refs[1]!, refs[2]!],
     primaryParentId: refs[2]!,
     contextManifest: [refs[2]!, refs[1]!],
-    prompt: 'merged question',
   })
   repository.renameBranch(repository.getSnapshot().sessionBranches.source!, 'research-line')
   return repository.getSnapshot()

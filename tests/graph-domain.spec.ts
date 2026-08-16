@@ -23,21 +23,35 @@ describe('graph domain', () => {
     const before = repository.getSnapshot()
     const one = before.sessionTurnRefs.source![1]!
     const two = before.sessionTurnRefs.source![2]!
-    repository.prepareBranch({
-      sourceSessionId: 'source',
+    repository.prepareMergedSession({
       childSessionId: 'child',
-      baseNodeId: one,
       importedNodeIds: [one, two],
       parentIds: [one, two],
       primaryParentId: two,
       contextManifest: [two, one],
-      prompt: 'merged question',
     })
 
     const state = repository.getSnapshot()
     // The medium stores JSON, so parse what a real write would carry.
     const parsed = graphStateSchema.parse(JSON.parse(JSON.stringify(state)))
     expect(parsed).toEqual(state)
+    expect(parsed.pendingMerges.child).not.toHaveProperty('prompt')
+  })
+
+  it('still accepts a format-1 pending merge written by the old ask flow', () => {
+    const legacy = {
+      ...EMPTY_GRAPH_STATE,
+      pendingMerges: {
+        child: {
+          branchId: 'branch-1',
+          parentIds: ['pa-1'],
+          primaryParentId: 'pa-1',
+          contextManifest: ['pa-1'],
+          prompt: 'legacy question',
+        },
+      },
+    }
+    expect(graphStateSchema.parse(legacy).pendingMerges.child?.prompt).toBe('legacy question')
   })
 
   it('accepts the empty ledger a fresh scope starts from', () => {

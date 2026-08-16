@@ -5,9 +5,9 @@ import { buildMergedSessionSeed } from '../src/history.ts'
 import { MERGE_LINEAGE_EVENT, readMergeLineage } from '../src/merge-lineage.ts'
 import { projectSession } from '../src/project-history.ts'
 import {
-  decodeCreateMergedSessionPayload,
+  decodeCreateMergedSessionRequest,
+  decodeCreateMergedSessionResponse,
   decodeProjectGraphResponse,
-  encodeCreateMergedSessionPayload,
 } from '../src/protocol.ts'
 
 function completedTurn(sessionId: string, question: string, answer: string): Session {
@@ -116,13 +116,21 @@ describe('Host-side merged history', () => {
     expect(readMergeLineage(plain.events)).toBeUndefined()
   })
 
-  it('round-trips the private command payload without conversation text', () => {
-    const payload = {
+  it('strictly validates the private merge RPC request and response', () => {
+    const request = {
       targetSessionId: 'merged',
       sources: [{ sourceSessionId: 'source', sourceTurn: 7, sourceBoundarySeq: 42 }],
     }
-    const encoded = encodeCreateMergedSessionPayload(payload)
-    expect(encoded).not.toContain('prompt')
-    expect(decodeCreateMergedSessionPayload(encoded)).toEqual(payload)
+    expect(decodeCreateMergedSessionRequest(request)).toEqual(request)
+    expect(decodeCreateMergedSessionResponse({ targetSessionId: 'merged' }))
+      .toEqual({ targetSessionId: 'merged' })
+    expect(() => decodeCreateMergedSessionRequest({ ...request, rawPrompt: 'must not cross the seam' }))
+      .toThrow(/unexpected field/)
+    expect(() => decodeCreateMergedSessionRequest({
+      ...request,
+      sources: [{ ...request.sources[0], extra: true }],
+    })).toThrow(/unexpected field/)
+    expect(() => decodeCreateMergedSessionResponse({ targetSessionId: 'merged', matched: true }))
+      .toThrow(/unexpected field/)
   })
 })
