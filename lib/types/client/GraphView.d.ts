@@ -3,6 +3,7 @@ import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/clie
 import type { InjectFace } from '@deepseek-ai/dsh-client-ui-slots';
 import type { HistoryPreviewImageAttachment, HistoryPreviewResponse, HistoryTurnSource, ProjectGraphResponse } from '../protocol.ts';
 import { type LoadedPreviewImage } from './ChatHistoryPreview.tsx';
+import type { ContextTrayChannel } from './context-tray-channel.ts';
 import type { GraphRepository } from './repository.ts';
 import type { GraphState, ImportedTurn, TurnNodeId } from './types.ts';
 export interface ProjectGraphLoad {
@@ -17,6 +18,8 @@ export interface MergeDraftTransfer {
 }
 /** Browser callbacks and observables supplied from the plugin apply closure. */
 export interface GraphViewInjected {
+    /** Session-local bridge to the official composer input dock. */
+    readonly tray: ContextTrayChannel;
     readonly hooks: {
         graph: GraphRepository;
     };
@@ -30,4 +33,4 @@ export interface GraphViewInjected {
     readonly createMergedSession: (manifest: readonly TurnNodeId[], draft: MergeDraftTransfer, signal: AbortSignal) => Promise<void>;
 }
 /** Complete Branches workbench: graph selection, read-only history, and Merge. */
-export declare function GraphView({ sessionId, useSession, useInput, inputActions, useGraph, syncTurns, adoptObservedGraph, loadProjectGraph, loadHistoryPreview, loadPreviewImage, setComposerBlocked, createMergedSession, }: ConvViewProps & InjectFace<GraphViewInjected>): import("react").JSX.Element;
+export declare function GraphView({ sessionId, useSession, useInput, inputActions, useGraph, syncTurns, adoptObservedGraph, loadProjectGraph, loadHistoryPreview, loadPreviewImage, tray, setComposerBlocked, createMergedSession, }: ConvViewProps & InjectFace<GraphViewInjected>): import("react").JSX.Element;

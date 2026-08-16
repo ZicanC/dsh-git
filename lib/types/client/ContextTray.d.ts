@@ -12,9 +12,9 @@ export interface ContextTrayProps {
     readonly onMove: (nodeId: TurnNodeId, beforeId: TurnNodeId) => void;
     readonly onMoveEnd: (nodeId: TurnNodeId) => void;
     readonly onRemove: (nodeId: TurnNodeId) => void;
-    readonly onClear: () => void;
     readonly onMerge: () => Promise<void>;
+    /** Consumed by the composer-row discard action, not by the tray itself. */
     readonly onDiscard: (send: boolean) => void;
 }
 /** Draggable ordered PA selection. The resident DSH composer remains below it. */
-export declare function ContextTray({ state, selectedIds, candidateId, busy, error, dirty, draftHasContent, overLimit, onMove, onMoveEnd, onRemove, onClear, onMerge, onDiscard, }: ContextTrayProps): import("react").JSX.Element;
+export declare function ContextTray({ state, selectedIds, candidateId, busy, error, dirty, overLimit, onMove, onMoveEnd, onRemove, onMerge, }: ContextTrayProps): import("react").JSX.Element | null;

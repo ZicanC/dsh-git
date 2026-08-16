@@ -1,10 +1,15 @@
 // @vitest-environment jsdom
+import { useSyncExternalStore } from 'react'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import type { HistoryPreviewResponse, HistoryTurnSource } from '../src/protocol.ts'
-import { ContextTray } from '../src/client/ContextTray.tsx'
+import { ComposerDiscardAction } from '../src/client/ComposerDiscardAction.tsx'
+import { ContextTrayDock } from '../src/client/ContextTrayDock.tsx'
+import { ContextTray, type ContextTrayProps } from '../src/client/ContextTray.tsx'
 import { GraphCanvas } from '../src/client/GraphCanvas.tsx'
 import { GraphView } from '../src/client/GraphView.tsx'
+import { ContextTrayChannel } from '../src/client/context-tray-channel.ts'
 import { installLocaleSource } from '../src/client/i18n.ts'
 import type { GraphState } from '../src/client/types.ts'
 import { graph, node } from './fixtures.ts'
@@ -71,6 +76,7 @@ function graphViewFixture(
     _manifest: unknown, _draft: unknown, _signal: AbortSignal,
   ) => {})
   const loadHistoryPreview = vi.fn(async (sources: readonly HistoryTurnSource[]) => previewFor(sources))
+  const tray = new ContextTrayChannel()
   const props = {
     sessionId: 'session-a',
     useSession: (selector: (value: unknown) => unknown) => selector(sessionSnapshot),
@@ -82,10 +88,31 @@ function graphViewFixture(
     loadProjectGraph: vi.fn(async () => null),
     loadHistoryPreview,
     loadPreviewImage: vi.fn(async () => ({ url: 'blob:test', release: vi.fn() })),
+    tray,
     setComposerBlocked,
     createMergedSession,
   }
-  return { props, submit, setComposerBlocked, createMergedSession, loadHistoryPreview }
+  return { props, tray, submit, setComposerBlocked, createMergedSession, loadHistoryPreview }
+}
+
+type GraphViewFixture = ReturnType<typeof graphViewFixture>
+
+function GraphViewHarness({ fixture }: { fixture: GraphViewFixture }) {
+  const useTray: SnapshotSelectorHook<ContextTrayProps | null> = selector =>
+    useSyncExternalStore(
+      fixture.tray.subscribe,
+      () => selector(fixture.tray.getSnapshot()),
+      () => selector(fixture.tray.getSnapshot()),
+    )
+  return <>
+    <GraphView {...(fixture.props as never)} />
+    <ContextTrayDock {...({ useTray } as never)} />
+    <ComposerDiscardAction {...({ useTray } as never)} />
+  </>
+}
+
+function renderGraphView(fixture: GraphViewFixture) {
+  return render(<GraphViewHarness fixture={fixture} />)
 }
 
 describe('graph UI', () => {
@@ -117,7 +144,7 @@ describe('graph UI', () => {
     expect(preview).toHaveBeenCalledWith(one.id)
   })
 
-  it('uses PA numbers in Context Tray and reserves hashes for the inspector', () => {
+  it('keeps Context Tray compact until expanded, then exposes PA ordering controls', () => {
     const move = vi.fn()
     const tray = render(<ContextTray
       state={state}
@@ -131,10 +158,13 @@ describe('graph UI', () => {
       onMove={move}
       onMoveEnd={vi.fn()}
       onRemove={vi.fn()}
-      onClear={vi.fn()}
       onMerge={async () => {}}
       onDiscard={vi.fn()}
     />)
+    expect(within(tray.container).getByText(/2 PA · 约 \d+ tokens/)).toBeTruthy()
+    expect(within(tray.container).getByRole('button', { expanded: false })).toBeTruthy()
+    expect(within(tray.container).queryByText('PA1')).toBeNull()
+    fireEvent.click(within(tray.container).getByRole('button', { name: '展开 Context Tray' }))
     expect(within(tray.container).getByText('PA1')).toBeTruthy()
     expect(within(tray.container).getByText('PA2')).toBeTruthy()
     expect(within(tray.container).queryByText('PA-920b5')).toBeNull()
@@ -142,9 +172,76 @@ describe('graph UI', () => {
     expect(move).toHaveBeenCalledWith(two.id, one.id)
   })
 
+  it('renders no Context Tray surface for a clean empty selection', () => {
+    const tray = render(<ContextTray
+      state={state}
+      selectedIds={[]}
+      candidateId={null}
+      busy={false}
+      error={null}
+      dirty={false}
+      draftHasContent={false}
+      overLimit={false}
+      onMove={vi.fn()}
+      onMoveEnd={vi.fn()}
+      onRemove={vi.fn()}
+      onMerge={async () => {}}
+      onDiscard={vi.fn()}
+    />)
+    expect(tray.container.innerHTML).toBe('')
+  })
+
+  it('auto-expands important dirty, candidate, and error states', () => {
+    const common = {
+      state,
+      selectedIds: [one.id, two.id],
+      busy: false,
+      draftHasContent: false,
+      overLimit: false,
+      onMove: vi.fn(),
+      onMoveEnd: vi.fn(),
+      onRemove: vi.fn(),
+      onMerge: async () => {},
+      onDiscard: vi.fn(),
+    }
+    const tray = render(<ContextTray
+      {...common}
+      candidateId={three.id}
+      error={null}
+      dirty={false}
+    />)
+    expect((within(tray.container).getByRole('button', { expanded: true }) as HTMLButtonElement).disabled).toBe(true)
+    // The preview joins the chips as a dashed chip; its prose lives in Chat History.
+    expect(within(tray.container).queryByText(/绿色 PA 只是虚线预览/)).toBeNull()
+    expect(within(tray.container).getByText(/2 PA \+ 1 预览 · 约 \d+ tokens/)).toBeTruthy()
+    const candidateChip = tray.container.querySelector('[data-preview="candidate"]')
+    expect(candidateChip?.textContent).toContain('PA3')
+    expect(candidateChip?.className).toContain('dsh-git-chip-candidate')
+    expect(within(tray.container).getByRole('button', { name: '关闭 PA3 预览' })).toBeTruthy()
+    expect(within(tray.container).queryByRole('button', { name: '将 PA3 向前移动' })).toBeNull()
+
+    tray.rerender(<ContextTray
+      {...common}
+      candidateId={null}
+      error={null}
+      dirty={true}
+    />)
+    expect((within(tray.container).getByRole('button', { expanded: true }) as HTMLButtonElement).disabled).toBe(true)
+    expect(within(tray.container).queryByText(/Context 有未 Merge 的更改/)).toBeNull()
+    expect(within(tray.container).queryByRole('button', { name: /放弃更改/ })).toBeNull()
+
+    tray.rerender(<ContextTray
+      {...common}
+      candidateId={null}
+      error="preview failed"
+      dirty={false}
+    />)
+    expect(within(tray.container).getByRole('alert').textContent).toBe('preview failed')
+  })
+
   it('starts with the current Session history selected and keeps PA Context hidden', async () => {
     const fixture = graphViewFixture(state)
-    const view = render(<GraphView {...(fixture.props as never)} />)
+    const view = renderGraphView(fixture)
 
     expect(view.container.querySelector('[data-conversation-composer-overlay]')).toBeTruthy()
     expect(screen.queryByLabelText('PA Context Window')).toBeNull()
@@ -162,7 +259,7 @@ describe('graph UI', () => {
 
   it('previews a clicked PA as a green dashed candidate, then Add commits it', async () => {
     const fixture = graphViewFixture(state)
-    const view = render(<GraphView {...(fixture.props as never)} />)
+    const view = renderGraphView(fixture)
     await vi.waitFor(() => expect(screen.getByRole('button', { name: '查看 PA1 context' }).getAttribute('data-selection-state')).toBe('selected'))
 
     const pa3 = screen.getByRole('button', { name: '查看 PA3 context' })
@@ -173,6 +270,11 @@ describe('graph UI', () => {
     expect(screen.getByLabelText('PA Context Window')).toBeTruthy()
     expect(screen.getByText('PA-ca11d')).toBeTruthy()
     expect(screen.getByText('2 已加入 + 1 预览')).toBeTruthy()
+    // The preview note sits in the Chat History gutter, and the tray shows the dashed chip.
+    const chatPanel = view.container.querySelector('.dsh-git-chat-panel')
+    expect(within(chatPanel as HTMLElement).getByText(/绿色 PA 只是虚线预览/)).toBeTruthy()
+    expect(within(screen.getByLabelText('Context Tray')).getByText('PA3')).toBeTruthy()
+    expect(screen.getByLabelText('Context Tray').querySelector('[data-preview="candidate"]')).toBeTruthy()
     await vi.waitFor(() => {
       expect(view.container.querySelector('[data-preview-state="candidate"]')).toBeTruthy()
       expect(screen.getByText('虚线预览')).toBeTruthy()
@@ -188,13 +290,15 @@ describe('graph UI', () => {
     fireEvent.click(screen.getByRole('button', { name: '加入 Context' }))
     expect(pa3.getAttribute('data-selection-state')).toBe('selected')
     expect(view.container.querySelector('[data-preview-state="candidate"]')).toBeNull()
+    expect(screen.queryByText(/绿色 PA 只是虚线预览/)).toBeNull()
+    expect(screen.getByLabelText('Context Tray').querySelector('[data-preview="candidate"]')).toBeNull()
     expect(screen.getByText('3 已加入')).toBeTruthy()
     expect(screen.getByRole('button', { name: '移出 Context' })).toBeTruthy()
   })
 
   it('Merge creates a new Chat with the ordered selection and never submits', async () => {
     const fixture = graphViewFixture(state, { draft: 'carry this official draft' })
-    render(<GraphView {...(fixture.props as never)} />)
+    renderGraphView(fixture)
     await vi.waitFor(() => expect(screen.getByRole('button', { name: '查看 PA1 context' }).getAttribute('data-selection-state')).toBe('selected'))
     fireEvent.click(screen.getByRole('button', { name: '查看 PA3 context' }))
     fireEvent.click(screen.getByRole('button', { name: '加入 Context' }))
@@ -210,12 +314,12 @@ describe('graph UI', () => {
 
   it('dirty selection blocks the composer and discard-and-send targets the source Session', async () => {
     const fixture = graphViewFixture(state, { draft: 'send from source' })
-    render(<GraphView {...(fixture.props as never)} />)
+    renderGraphView(fixture)
     await vi.waitFor(() => expect(screen.getByRole('button', { name: '查看 PA3 context' })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: '查看 PA3 context' }))
 
     await vi.waitFor(() => expect(fixture.setComposerBlocked).toHaveBeenCalledWith(true))
-    fireEvent.click(screen.getByRole('button', { name: '放弃更改并发送原会话' }))
+    fireEvent.click(screen.getByRole('button', { name: '放弃更改并发送' }))
 
     await vi.waitFor(() => expect(fixture.submit).toHaveBeenCalledTimes(1))
     expect(fixture.setComposerBlocked).toHaveBeenCalledWith(false)
@@ -225,11 +329,11 @@ describe('graph UI', () => {
   it('does not bypass a foreign composer block when discarding context edits', async () => {
     const fixture = graphViewFixture(state, { draft: 'do not bypass safety' })
     fixture.setComposerBlocked.mockImplementation(() => false)
-    render(<GraphView {...(fixture.props as never)} />)
+    renderGraphView(fixture)
     await vi.waitFor(() => expect(screen.getByRole('button', { name: '查看 PA3 context' })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: '查看 PA3 context' }))
 
-    fireEvent.click(screen.getByRole('button', { name: '放弃更改并发送原会话' }))
+    fireEvent.click(screen.getByRole('button', { name: '放弃更改并发送' }))
 
     expect(fixture.submit).not.toHaveBeenCalled()
     expect(screen.getByRole('alert').textContent).toContain('来源 Session 仍被其他系统条件阻塞')
@@ -244,7 +348,7 @@ describe('graph UI', () => {
         nextSignal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true })
       })
     })
-    const view = render(<GraphView {...(fixture.props as never)} />)
+    const view = renderGraphView(fixture)
     await vi.waitFor(() => expect(screen.getByRole('button', { name: '查看 PA1 context' }).getAttribute('data-selection-state')).toBe('selected'))
 
     fireEvent.click(screen.getByRole('button', { name: 'Merge' }))
@@ -253,6 +357,7 @@ describe('graph UI', () => {
 
     view.unmount()
     expect(signal?.aborted).toBe(true)
+    expect(fixture.tray.getSnapshot()).toBeNull()
     expect(fixture.setComposerBlocked).toHaveBeenCalledWith(false)
   })
 
@@ -264,12 +369,12 @@ describe('graph UI', () => {
       subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener) } },
     })
     const fixture = graphViewFixture(state)
-    render(<GraphView {...(fixture.props as never)} />)
+    renderGraphView(fixture)
     expect(screen.queryByLabelText('界面语言')).toBeNull()
     localeSnapshot = { active: 'en', revision: 1 }
     act(() => { for (const listener of listeners) listener() })
     expect(screen.getByText('Blue: included · green: preview')).toBeTruthy()
-    expect(screen.getByText(/Merge only creates a new Chat/)).toBeTruthy()
+    expect(screen.getByText(/2 PA · About \d+ tokens/)).toBeTruthy()
   })
 
   it('renders prompt and answer Markdown in the PA Context Window', async () => {
@@ -283,7 +388,7 @@ describe('graph UI', () => {
       sessionTurnRefs: { 'session-a': { 1: markdownNode.id } },
     })
     const fixture = graphViewFixture(markdownState)
-    render(<GraphView {...(fixture.props as never)} />)
+    renderGraphView(fixture)
     await vi.waitFor(() => expect(screen.getByRole('button', { name: '查看 PA1 context' }).getAttribute('data-selection-state')).toBe('selected'))
 
     fireEvent.click(screen.getByRole('button', { name: '查看 PA1 context' }))

@@ -14,8 +14,11 @@ import {
   decodeProjectGraphResponse,
   type HistoryPreviewImageAttachment,
 } from '../protocol.ts'
+import { ComposerDiscardAction, type ComposerDiscardActionInjected } from './ComposerDiscardAction.tsx'
+import { ContextTrayDock, type ContextTrayDockInjected } from './ContextTrayDock.tsx'
 import { GraphView, type GraphViewInjected } from './GraphView.tsx'
 import { ComposerBlockLease } from './composer-block-lease.ts'
+import { ContextTrayChannels } from './context-tray-channel.ts'
 import { connectionGraphTransport } from './graph-transport.ts'
 import { installLocaleSource, localized } from './i18n.ts'
 import { installProjectBridge } from './project-bridge.tsx'
@@ -107,6 +110,7 @@ export function apply(ctx: Context): void {
     ctx.workspaces,
     connectionGraphTransport(ctx.connection),
   )
+  const contextTrays = new ContextTrayChannels()
   ctx.effect(() => installLocaleSource(ctx.locale), 'dsh-git: locale source')
   ctx.effect(installStyles, 'dsh-git: stylesheet')
   ctx.effect(() => installProjectBridge({
@@ -116,6 +120,24 @@ export function apply(ctx: Context): void {
     locale: ctx.locale,
     repositoryForWorkspace: workspaceId => repositories.forWorkspace(workspaceId),
   }), 'dsh-git: project graph compatibility bridge')
+
+  ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
+    name: 'conversation.input.dock',
+    id: 'dsh-git-context-tray',
+    order: 15,
+    inject: (sessionId: SessionId): ContextTrayDockInjected => ({
+      hooks: { tray: contextTrays.forSession(String(sessionId)) },
+    }),
+  }, ContextTrayDock))
+
+  ctx.slots.inject('conversation.input.right', () => ctx.slots.register({
+    name: 'conversation.input.right',
+    id: 'dsh-git-discard-context',
+    order: 10,
+    inject: (sessionId: SessionId): ComposerDiscardActionInjected => ({
+      hooks: { tray: contextTrays.forSession(String(sessionId)) },
+    }),
+  }, ComposerDiscardAction))
 
   ctx.slots.inject('conversation.view', () => ctx.slots.register({
     name: 'conversation.view',
@@ -142,6 +164,7 @@ export function apply(ctx: Context): void {
       repository.reconcileOfficialForks(sessionParents())
 
       return {
+        tray: contextTrays.forSession(String(sessionId)),
         hooks: { graph: repository },
         syncTurns: turns => {
           repository.syncSession(sessionId, turns)

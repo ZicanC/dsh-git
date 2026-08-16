@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { DraftAttachmentId } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { InjectFace } from '@deepseek-ai/dsh-client-ui-slots'
@@ -7,7 +7,8 @@ import type {
 } from '../protocol.ts'
 import { MAX_MERGED_HISTORY_TURNS } from '../protocol.ts'
 import { ChatHistoryPreview, type LoadedPreviewImage } from './ChatHistoryPreview.tsx'
-import { ContextTray } from './ContextTray.tsx'
+import type { ContextTrayProps } from './ContextTray.tsx'
+import type { ContextTrayChannel } from './context-tray-channel.ts'
 import { GraphCanvas } from './GraphCanvas.tsx'
 import { PAContextWindow } from './PAContextWindow.tsx'
 import type { GraphRepository } from './repository.ts'
@@ -31,6 +32,8 @@ export interface MergeDraftTransfer {
 
 /** Browser callbacks and observables supplied from the plugin apply closure. */
 export interface GraphViewInjected {
+  /** Session-local bridge to the official composer input dock. */
+  readonly tray: ContextTrayChannel
   readonly hooks: { graph: GraphRepository }
   readonly syncTurns: (turns: readonly ImportedTurn[]) => void
   readonly adoptObservedGraph: (state: GraphState) => void
@@ -80,7 +83,7 @@ function isAbort(cause: unknown, signal: AbortSignal): boolean {
 export function GraphView({
   sessionId, useSession, useInput, inputActions, useGraph, syncTurns,
   adoptObservedGraph, loadProjectGraph, loadHistoryPreview, loadPreviewImage,
-  setComposerBlocked, createMergedSession,
+  tray, setComposerBlocked, createMergedSession,
 }: ConvViewProps & InjectFace<GraphViewInjected>) {
   const locale = useLocale()
   const snapshot = useSession(value => value)
@@ -102,6 +105,7 @@ export function GraphView({
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const mergeAbortRef = useRef<AbortController | null>(null)
+  const trayOwnerRef = useRef<object>({})
 
   useEffect(() => () => { mergeAbortRef.current?.abort() }, [])
 
@@ -320,6 +324,32 @@ export function GraphView({
     contextManifest: [],
   }
   const draftHasContent = input.draft.trim() !== '' || input.imageIds.length > 0
+  const trayModel: ContextTrayProps = {
+    state,
+    selectedIds,
+    candidateId,
+    busy,
+    error: actionError,
+    dirty,
+    draftHasContent,
+    overLimit: selectedIds.length > MAX_MERGED_HISTORY_TURNS,
+    onMove: move,
+    onMoveEnd: moveEnd,
+    onRemove: remove,
+    onMerge: merge,
+    onDiscard: discard,
+  }
+
+  // The Branches view owns all mutable selection state; the official input
+  // dock only observes this committed view model. Publish after React commits
+  // and clear only this mount's owner token when the tab is left.
+  useLayoutEffect(() => {
+    tray.publish(trayOwnerRef.current, trayModel)
+  })
+  useLayoutEffect(() => {
+    const owner = trayOwnerRef.current
+    return () => { tray.clear(owner) }
+  }, [tray])
 
   return <div className="dsh-git-root" data-conversation-composer-overlay="">
     <div className="dsh-git-workbench">
@@ -366,23 +396,12 @@ export function GraphView({
           error={previewError}
           loadImage={loadPreviewImage}
         />
+        {/* The preview note rides the history's right gutter, beside the dashed
+            turn it explains, instead of taking a line inside the Context Tray. */}
+        {candidateId === null ? null : <aside className="dsh-git-candidate-note" role="status">
+          {localized('绿色 PA 只是虚线预览；请在 PA Context Window 中选择“加入 Context”，或关闭预览。', 'The green PA is only a dashed preview; add it from the PA Context Window or close the preview.', locale)}
+        </aside>}
       </section>
     </div>
-    <ContextTray
-      state={state}
-      selectedIds={selectedIds}
-      candidateId={candidateId}
-      busy={busy}
-      error={actionError}
-      dirty={dirty}
-      draftHasContent={draftHasContent}
-      overLimit={selectedIds.length > MAX_MERGED_HISTORY_TURNS}
-      onMove={move}
-      onMoveEnd={moveEnd}
-      onRemove={remove}
-      onClear={() => { setSelectedIds([]); setCandidateId(null); setInspectedId(null); setSelectionTouched(true) }}
-      onMerge={merge}
-      onDiscard={discard}
-    />
   </div>
 }
