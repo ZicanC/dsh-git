@@ -51,7 +51,8 @@ const pendingMergeSchema = z.object({
   parentIds: z.array(nodeId),
   primaryParentId: nodeId.nullable(),
   contextManifest: z.array(nodeId),
-  prompt: z.string(),
+  // Kept optional so format-1 ledgers written by the old ask-and-merge flow still load.
+  prompt: z.string().optional(),
 })
 
 /** One scope's complete ledger, as stored and as accepted off the wire. */

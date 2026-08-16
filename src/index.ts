@@ -2,7 +2,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
 import { resolveSessionPreset } from '@deepseek-ai/dsh-agent-presets'
-import type {} from '@deepseek-ai/dsh-commands'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-query'
 import type {} from '@deepseek-ai/dsh-storage-domain'
@@ -10,22 +9,26 @@ import type {} from '@deepseek-ai/dsh-workspace'
 import type {} from './connection-contract.ts'
 import { GRAPH_DOMAIN, assertScopeId, graphStateSchema } from './graph-domain.ts'
 import { buildMergedSessionSeed } from './history.ts'
+import { projectHistoryPreview } from './history-preview.ts'
 import { projectSession } from './project-history.ts'
 import {
-  CREATE_MERGED_SESSION_COMMAND,
+  CREATE_MERGED_SESSION_RPC_ENDPOINT,
   GRAPH_READ_ENDPOINT,
   GRAPH_WRITE_ENDPOINT,
+  HISTORY_PREVIEW_RPC_ENDPOINT,
   PROJECT_GRAPH_RPC_CHANNEL,
   PROJECT_GRAPH_RPC_ENDPOINT,
-  decodeCreateMergedSessionPayload,
+  decodeCreateMergedSessionRequest,
   decodeGraphReadRequest,
   decodeGraphWriteRequest,
+  decodeHistoryPreviewRequest,
   decodeProjectGraphRequest,
+  type CreateMergedSessionResponse,
 } from './protocol.ts'
 
 export const name = 'dsh-git'
 export const inject = [
-  'agents', 'agentPresets', 'commands', 'connection', 'sessionQuery', 'storageDomain', 'workspaceRegistry',
+  'agents', 'agentPresets', 'connection', 'sessionQuery', 'storageDomain', 'workspaceRegistry',
 ]
 
 /** Repair merge sessions created by versions that copied cwd but forgot Workspace membership. */
@@ -57,7 +60,56 @@ function failure(error: unknown): { ok: false; error: { code: string; message: s
   }
 }
 
-/** Mount the private history-composition command used by the browser half. */
+/** Create one merged child using the final tray source as its official parent. */
+export async function createMergedSession(
+  ctx: Context,
+  payload: unknown,
+  signal: AbortSignal,
+): Promise<CreateMergedSessionResponse> {
+  const request = decodeCreateMergedSessionRequest(payload)
+  signal.throwIfAborted()
+  const targetSessionId = SessionId(request.targetSessionId)
+  if (ctx.agents.get(targetSessionId) !== undefined) {
+    throw new Error(`target session "${targetSessionId}" already exists`)
+  }
+
+  const snapshots = new Map<string, Awaited<ReturnType<typeof ctx.sessionQuery.readSession>>>()
+  const readSession = async (sessionId: ReturnType<typeof SessionId>) => {
+    const existing = snapshots.get(sessionId)
+    if (existing !== undefined) return existing
+    signal.throwIfAborted()
+    const snapshot = await ctx.sessionQuery.readSession(sessionId)
+    signal.throwIfAborted()
+    snapshots.set(sessionId, snapshot)
+    return snapshot
+  }
+  const primarySessionId = SessionId(request.sources.at(-1)!.sourceSessionId)
+  const primary = await readSession(primarySessionId)
+  const seed = await buildMergedSessionSeed(targetSessionId, request.sources, readSession)
+  signal.throwIfAborted()
+
+  const sourceWorkspace = ctx.workspaceRegistry.list()
+    .find(workspace => workspace.sessionIds.includes(primarySessionId))
+  const preset = resolveSessionPreset({ header: primary.session, events: primary.events })
+  await ctx.agents.create({
+    sessionId: targetSessionId,
+    seed,
+    meta: {
+      ...(primary.session.cwd === undefined ? {} : { cwd: primary.session.cwd }),
+      parentSession: primarySessionId,
+      seedLength: seed.length,
+      ...(preset === undefined ? {} : { agentPreset: preset }),
+    },
+    signal,
+    setup: agentCtx => ctx.agentPresets.mount(agentCtx, preset).then(() => undefined),
+  })
+  // Once creation publishes, finish durable Workspace membership even if the
+  // browser disconnects: leaving a hidden orphan would violate the merge contract.
+  if (sourceWorkspace !== undefined) await sourceWorkspace.attachSession(targetSessionId)
+  return { targetSessionId }
+}
+
+/** Mount the trusted RPCs used by the browser half. */
 export async function apply(ctx: Context): Promise<void> {
   await repairWorkspaceMembership(ctx)
   const domain = await ctx.storageDomain.open(GRAPH_DOMAIN)
@@ -77,11 +129,32 @@ export async function apply(ctx: Context): Promise<void> {
     return { ok: true, value: { workspaceId: request.workspaceId, sessions } }
   }
 
-  ctx.connection.rpc.handle(PROJECT_GRAPH_RPC_CHANNEL, async (endpoint, payload) => {
+  /** Project selected completed turns exactly as the merged seed will copy them. */
+  const readHistoryPreview = async (
+    payload: unknown,
+    signal: AbortSignal,
+  ): Promise<{ ok: true; value: unknown }> => {
+    const request = decodeHistoryPreviewRequest(payload)
+    signal.throwIfAborted()
+    const value = await projectHistoryPreview(request.sources, async sessionId => {
+      signal.throwIfAborted()
+      const snapshot = await ctx.sessionQuery.readSession(sessionId)
+      signal.throwIfAborted()
+      return snapshot
+    })
+    signal.throwIfAborted()
+    return { ok: true, value }
+  }
+
+  ctx.connection.rpc.handle(PROJECT_GRAPH_RPC_CHANNEL, async (endpoint, payload, signal) => {
     try {
       switch (endpoint) {
+        case CREATE_MERGED_SESSION_RPC_ENDPOINT:
+          return { ok: true, value: await createMergedSession(ctx, payload, signal) }
         case PROJECT_GRAPH_RPC_ENDPOINT:
           return await readProjectGraph(payload)
+        case HISTORY_PREVIEW_RPC_ENDPOINT:
+          return await readHistoryPreview(payload, signal)
         case GRAPH_READ_ENDPOINT: {
           const scopeId = assertScopeId(decodeGraphReadRequest(payload).scopeId)
           return { ok: true, value: { scopeId, state: scopes.get(scopeId) ?? null } }
@@ -101,37 +174,4 @@ export async function apply(ctx: Context): Promise<void> {
       return failure(error)
     }
   }, { authority: 'trusted-host' })
-  ctx.commands.register({
-    name: CREATE_MERGED_SESSION_COMMAND,
-    description: 'Create a dsh-git branch from selected historical turns',
-    recordInput: false,
-    handler: async ({ agent, rawInput }) => {
-      const payload = decodeCreateMergedSessionPayload(rawInput)
-      const targetSessionId = SessionId(payload.targetSessionId)
-      if (ctx.agents.get(targetSessionId) !== undefined) {
-        throw new Error(`target session "${targetSessionId}" already exists`)
-      }
-      const seed = await buildMergedSessionSeed(
-        targetSessionId,
-        payload.sources,
-        sourceId => ctx.sessionQuery.readSession(sourceId),
-      )
-      const sourceWorkspace = ctx.workspaceRegistry.list()
-        .find(workspace => workspace.sessionIds.includes(agent.id))
-      const preset = resolveSessionPreset(agent.session)
-      await ctx.agents.create({
-        sessionId: targetSessionId,
-        seed,
-        meta: {
-          ...(agent.session.header.cwd === undefined ? {} : { cwd: agent.session.header.cwd }),
-          parentSession: agent.id,
-          seedLength: seed.length,
-          ...(preset === undefined ? {} : { agentPreset: preset }),
-        },
-        setup: agentCtx => ctx.agentPresets.mount(agentCtx, preset).then(() => undefined),
-      })
-      if (sourceWorkspace !== undefined) await sourceWorkspace.attachSession(targetSessionId)
-      return { kind: 'success', text: `created merged session ${targetSessionId}` }
-    },
-  })
 }

@@ -9,17 +9,14 @@ export interface ImportedTurn {
     readonly createdAt: number;
     readonly boundarySeq: number;
 }
-/** Inputs for preparing an automatically forked merge branch. */
-export interface PrepareBranchInput {
-    readonly sourceSessionId: string;
+/** Inputs for registering a merged Session before its first new official turn. */
+export interface PrepareMergedSessionInput {
     readonly childSessionId: string;
-    readonly baseNodeId: TurnNodeId;
     /** Nodes already materialized as Turns 1..N in the new Host-side session seed. */
     readonly importedNodeIds: readonly TurnNodeId[];
     readonly parentIds: readonly TurnNodeId[];
     readonly primaryParentId: TurnNodeId | null;
     readonly contextManifest: readonly TurnNodeId[];
-    readonly prompt: string;
 }
 /** One graph node's deterministic drawing position. */
 export interface GraphPosition {

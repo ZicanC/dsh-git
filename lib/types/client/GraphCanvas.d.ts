@@ -4,6 +4,12 @@ export interface GraphCanvasProps {
     readonly state: GraphState;
     readonly previewNodeId: TurnNodeId | null;
     readonly onPreview: (nodeId: TurnNodeId) => void;
+    /** Optional committed selection. Supplying this enables selection semantics. */
+    readonly selectedNodeIds?: readonly TurnNodeId[];
+    /** Optional uncommitted node being previewed for addition. */
+    readonly candidateNodeId?: TurnNodeId | null;
+    /** Make node inspection inert while a merge transaction is in flight. */
+    readonly disabled?: boolean;
     /** Optional project-level PA labels ordered by completion time. */
     readonly labels?: ReadonlyMap<TurnNodeId, string>;
     /** Optional stable color index per project Session. */
@@ -12,4 +18,4 @@ export interface GraphCanvasProps {
     readonly fit?: boolean;
 }
 /** Compact tree visualization: node details are intentionally kept out of the graph. */
-export declare function GraphCanvas({ state, previewNodeId, onPreview, labels: suppliedLabels, nodeColors, fit, }: GraphCanvasProps): import("react").JSX.Element;
+export declare function GraphCanvas({ state, previewNodeId, onPreview, selectedNodeIds, candidateNodeId, disabled, labels: suppliedLabels, nodeColors, fit, }: GraphCanvasProps): import("react").JSX.Element;

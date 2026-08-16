@@ -58,6 +58,30 @@ describe('GraphRepository', () => {
     expect(Object.keys(repository.getSnapshot().nodes)).toHaveLength(1)
   })
 
+  it('adopts unopened Session turns without replacing local graph identity or view state', () => {
+    const repository = new GraphRepository()
+    repository.syncSession('local', [turn(1)])
+    const localBefore = repository.getSnapshot()
+    const localNodeId = localBefore.sessionTurnRefs.local![1]!
+    const localBranchId = localBefore.sessionBranches.local!
+    repository.renameBranch(localBranchId, 'kept-local-name')
+
+    const observedRepository = new GraphRepository()
+    observedRepository.syncSession('remote', [{ ...turn(1), prompt: 'remote question' }])
+    const observed = observedRepository.getSnapshot()
+    const remoteNodeId = observed.sessionTurnRefs.remote![1]!
+
+    repository.adoptObservedGraph(observed)
+
+    const state = repository.getSnapshot()
+    expect(state.sessionTurnRefs.local![1]).toBe(localNodeId)
+    expect(state.sessionTurnRefs.remote![1]).toBe(remoteNodeId)
+    expect(state.nodes[remoteNodeId]?.prompt).toBe('remote question')
+    expect(state.branches[localBranchId]?.name).toBe('kept-local-name')
+    expect(state.headNodeId).toBe(localNodeId)
+    expect(state.contextManifest).toEqual([localNodeId])
+  })
+
   it('keeps a manual tray order when another node is selected', () => {
     const repository = new GraphRepository()
     repository.syncSession('s1', [turn(1), turn(2), turn(3)])
@@ -71,22 +95,24 @@ describe('GraphRepository', () => {
     expect(repository.getSnapshot().contextManifest).toEqual([three, one, two])
   })
 
-  it('creates a multi-parent merge node on the child session', () => {
+  it('registers imported turns and creates a multi-parent node from the first new official turn', () => {
     const repository = new GraphRepository()
     repository.syncSession('source', [turn(1), turn(2)])
     const before = repository.getSnapshot()
     const one = before.sessionTurnRefs.source![1]!
     const two = before.sessionTurnRefs.source![2]!
-    repository.prepareBranch({
-      sourceSessionId: 'source',
+    repository.prepareMergedSession({
       childSessionId: 'child',
-      baseNodeId: one,
       importedNodeIds: [one, two],
       parentIds: [one, two],
       primaryParentId: two,
       contextManifest: [two, one],
-      prompt: 'merged question',
     })
+    const prepared = repository.getSnapshot()
+    expect(prepared.sessionTurnRefs.child).toEqual({ 1: one, 2: two })
+    expect(prepared.branches[prepared.sessionBranches.child!]?.headId).toBe(two)
+    expect(prepared.pendingMerges.child).not.toHaveProperty('prompt')
+
     repository.syncSession('child', [turn(1), turn(2), turn(3, 30)])
 
     const state = repository.getSnapshot()
@@ -97,7 +123,36 @@ describe('GraphRepository', () => {
     expect(merged.parentIds).toEqual([one, two])
     expect(merged.primaryParentId).toBe(two)
     expect(merged.contextManifest).toEqual([two, one])
-    expect(merged.prompt).toBe('merged question')
+    expect(merged.prompt).toBe('q3')
+    expect(state.pendingMerges.child).toBeUndefined()
+  })
+
+  it('ignores a deprecated pending prompt when the merged Session sends its first new turn', async () => {
+    const seeded = new GraphRepository()
+    seeded.syncSession('source', [turn(1)])
+    const one = seeded.getSnapshot().sessionTurnRefs.source![1]!
+    seeded.prepareMergedSession({
+      childSessionId: 'child',
+      importedNodeIds: [one],
+      parentIds: [one],
+      primaryParentId: one,
+      contextManifest: [one],
+    })
+    const prepared = seeded.getSnapshot()
+    const legacy = {
+      ...prepared,
+      pendingMerges: {
+        ...prepared.pendingMerges,
+        child: { ...prepared.pendingMerges.child!, prompt: 'legacy question' },
+      },
+    }
+    const repository = new GraphRepository(new MemoryTransport({ 'workspace:one': legacy }), 'workspace:one')
+    await repository.hydrate()
+
+    repository.syncSession('child', [turn(1), { ...turn(2), prompt: 'real official prompt' }])
+
+    const state = repository.getSnapshot()
+    expect(state.nodes[state.sessionTurnRefs.child![2]!]!.prompt).toBe('real official prompt')
     expect(state.pendingMerges.child).toBeUndefined()
   })
 

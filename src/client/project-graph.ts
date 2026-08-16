@@ -25,6 +25,61 @@ interface TurnAddress {
   readonly turn: ProjectTurnDTO
 }
 
+function localOnlyTurn(sessionId: string, turn: number, node: TurnNode): ProjectTurnDTO {
+  return {
+    turn,
+    prompt: node.prompt,
+    answer: node.answer,
+    startedAt: node.createdAt,
+    // The browser ledger records the turn start but not its completion time.
+    // A local-only turn is necessarily newer than the frozen Host response, so
+    // its start is the closest stable timeline coordinate available here.
+    completedAt: node.createdAt,
+    boundarySeq: node.boundarySeq,
+    inherited: false,
+    fingerprint: `local:${encodeURIComponent(sessionId)}:${turn}:${node.boundarySeq}`,
+  }
+}
+
+/**
+ * Overlay turns learned by the live conversation subscription onto the frozen
+ * Workspace RPC snapshot. Addresses already present in the Host response stay
+ * authoritative; only missing `(session, turn)` coordinates are appended.
+ */
+function sessionsWithLocalOnlyTurns(
+  response: ProjectGraphResponse,
+  local: GraphState,
+): ProjectSessionDTO[] {
+  const responseIds = new Set(response.sessions.map(session => session.sessionId))
+  const sessions = response.sessions.map((session): ProjectSessionDTO => {
+    const knownTurns = new Set(session.turns.map(turn => turn.turn))
+    const additions = Object.entries(local.sessionTurnRefs[session.sessionId] ?? {})
+      .map(([rawTurn, nodeId]) => ({ turn: Number(rawTurn), node: local.nodes[nodeId] }))
+      .filter((entry): entry is { turn: number; node: TurnNode } =>
+        Number.isSafeInteger(entry.turn) && entry.turn > 0
+        && !knownTurns.has(entry.turn) && entry.node !== undefined)
+      .map(({ turn, node }) => localOnlyTurn(session.sessionId, turn, node))
+    return additions.length === 0
+      ? session
+      : { ...session, turns: [...session.turns, ...additions] }
+  })
+
+  for (const [sessionId, refs] of Object.entries(local.sessionTurnRefs)) {
+    if (responseIds.has(sessionId)) continue
+    const turns = Object.entries(refs)
+      .map(([rawTurn, nodeId]) => ({ turn: Number(rawTurn), node: local.nodes[nodeId] }))
+      .filter((entry): entry is { turn: number; node: TurnNode } =>
+        Number.isSafeInteger(entry.turn) && entry.turn > 0 && entry.node !== undefined)
+      .map(({ turn, node }) => localOnlyTurn(sessionId, turn, node))
+    if (turns.length === 0) continue
+    const bid = local.sessionBranches[sessionId]
+    const createdAt = (bid === undefined ? undefined : local.branches[bid]?.createdAt)
+      ?? Math.min(...turns.map(turn => turn.startedAt))
+    sessions.push({ sessionId, createdAt, seedLength: 0, turns })
+  }
+  return sessions
+}
+
 function deterministicNodeId(sessionId: string, turn: number): TurnNodeId {
   return `project-pa:${encodeURIComponent(sessionId)}:${turn}`
 }
@@ -63,7 +118,7 @@ export function assembleProjectGraph(
   local: GraphState,
   titles: Readonly<Record<string, string>> = {},
 ): ProjectGraphModel {
-  const sessions = [...response.sessions].sort((left, right) =>
+  const sessions = sessionsWithLocalOnlyTurns(response, local).sort((left, right) =>
     left.createdAt - right.createdAt || left.sessionId.localeCompare(right.sessionId))
   const addresses = sessions.flatMap(session => session.turns.map(turn => ({ session, turn })))
   const candidates = exactFingerprintCandidates(addresses, local)
@@ -74,6 +129,10 @@ export function assembleProjectGraph(
   const ordinaryForkTips = new Map<string, number>()
 
   for (const session of sessions) {
+    // A dsh-git merge has exact per-turn provenance. Its parentSession is only
+    // the Session used to create the child Agent and must never be interpreted
+    // as an ordinary copied-prefix fork.
+    if (session.mergeSources !== undefined) continue
     if (session.parentSessionId === undefined) continue
     const parent = sessionsById.get(session.parentSessionId)
     const inherited = session.turns.filter(turn => turn.inherited)
@@ -88,6 +147,30 @@ export function assembleProjectGraph(
     const cached = canonical.get(key)
     if (cached !== undefined) return cached
     const localId = local.sessionTurnRefs[session.sessionId]?.[turn.turn]
+
+    const mergeSource = session.mergeSources?.find(source => source.targetTurn === turn.turn)
+    if (mergeSource !== undefined && !resolving.has(key)) {
+      const sourceSession = sessionsById.get(mergeSource.sourceSessionId)
+      const sourceTurn = sourceSession?.turns.find(candidate =>
+        candidate.turn === mergeSource.sourceTurn
+        && candidate.boundarySeq === mergeSource.sourceBoundarySeq)
+      if (sourceSession !== undefined && sourceTurn !== undefined) {
+        resolving.add(key)
+        const sourceId = resolveCanonical(sourceSession, sourceTurn)
+        resolving.delete(key)
+        canonical.set(key, sourceId)
+        return sourceId
+      }
+    }
+
+    // A malformed or stale exact lineage coordinate must remain visibly
+    // distinct. Falling through to fingerprint matching could silently replace
+    // it with an identically worded PA from a different branch.
+    if (session.mergeSources !== undefined && turn.inherited) {
+      const id = deterministicNodeId(session.sessionId, turn.turn)
+      canonical.set(key, id)
+      return id
+    }
 
     // An ordinary Harness fork copies a contiguous prefix without renumbering
     // its turns. Prefer that explicit lineage over a Workspace-wide content
@@ -131,6 +214,7 @@ export function assembleProjectGraph(
   const branches: Record<string, ConversationBranch> = {}
   const sessionBranches: Record<string, string> = {}
   const sessionTurnRefs: Record<string, Record<number, TurnNodeId>> = {}
+  const exactMergeRelationIds = new Set<TurnNodeId>()
 
   for (const session of sessions) {
     const sid = session.sessionId
@@ -139,6 +223,11 @@ export function assembleProjectGraph(
     const refs: Record<number, TurnNodeId> = {}
     let previousId: TurnNodeId | null = null
     let firstOwn = true
+    const exactMergeParents = session.mergeSources === undefined
+      ? []
+      : [...new Set([...session.mergeSources]
+          .sort((left, right) => left.targetTurn - right.targetTurn)
+          .flatMap(source => canonical.get(addressKey(sid, source.targetTurn)) ?? []))]
     for (const turn of [...session.turns].sort((left, right) => left.turn - right.turn)) {
       const id = canonical.get(addressKey(sid, turn.turn))!
       refs[turn.turn] = id
@@ -158,14 +247,21 @@ export function assembleProjectGraph(
         // copied prefix. Their relations point at those duplicate ids, so use
         // the proven Host lineage for the entire ordinary-fork branch.
         const useLocalRelations = localNode !== undefined && !isForkMarker && !ordinaryForkTips.has(sid)
+        const isFirstMergedOwnTurn = session.mergeSources !== undefined
+          && !turn.inherited && firstOwn && exactMergeParents.length > 0
+        if (isFirstMergedOwnTurn) exactMergeRelationIds.add(id)
         const primaryParentId = isForkMarker
           ? forkSource?.primaryParentId ?? null
-          : useLocalRelations ? localNode.primaryParentId : previousId
+          : isFirstMergedOwnTurn
+            ? exactMergeParents.at(-1) ?? null
+            : useLocalRelations ? localNode.primaryParentId : previousId
         const parentIds = isForkMarker
           ? primaryParentId === null ? [] : [primaryParentId]
-          : useLocalRelations
-            ? localNode.parentIds.filter(parentId => local.nodes[parentId] !== undefined)
-            : previousId === null ? [] : [previousId]
+          : isFirstMergedOwnTurn
+            ? exactMergeParents
+            : useLocalRelations
+              ? localNode.parentIds.filter(parentId => local.nodes[parentId] !== undefined)
+              : previousId === null ? [] : [previousId]
         nodes[id] = {
           id,
           sessionId: localNode?.sessionId ?? sid,
@@ -184,7 +280,9 @@ export function assembleProjectGraph(
           parentIds,
           contextManifest: isForkMarker
             ? forkSource?.contextManifest ?? (primaryParentId === null ? [] : [primaryParentId])
-            : localNode?.contextManifest ?? (primaryParentId === null ? [] : [primaryParentId]),
+            : isFirstMergedOwnTurn
+              ? exactMergeParents
+              : localNode?.contextManifest ?? (primaryParentId === null ? [] : [primaryParentId]),
           branchId: localNode?.branchId ?? bid,
         }
       }
@@ -218,7 +316,7 @@ export function assembleProjectGraph(
   }
   // Fill the simple fallback context with the complete primary ancestry after every node exists.
   for (const [id, node] of Object.entries(nodes)) {
-    if (local.nodes[id] !== undefined) continue
+    if (local.nodes[id] !== undefined || exactMergeRelationIds.has(id)) continue
     nodes[id] = { ...node, contextManifest: primaryPath(provisional, node.primaryParentId) }
   }
   const timeline = Object.values(nodes)

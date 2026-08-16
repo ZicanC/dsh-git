@@ -1,160 +1,388 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { DraftAttachmentId } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace } from '@deepseek-ai/dsh-client-ui-slots'
-import type { GraphRepository } from './repository.ts'
-import { extractCompletedTurns } from './extract.ts'
+import type {
+  HistoryPreviewImageAttachment, HistoryPreviewResponse, HistoryTurnSource, ProjectGraphResponse,
+} from '../protocol.ts'
+import { MAX_MERGED_HISTORY_TURNS } from '../protocol.ts'
+import { ChatHistoryPreview, type LoadedPreviewImage } from './ChatHistoryPreview.tsx'
 import { ContextTray } from './ContextTray.tsx'
 import { GraphCanvas } from './GraphCanvas.tsx'
-import { nodeHash, nodeLabelMap } from './labels.ts'
-import { localized, useLocale, type Locale } from './i18n.ts'
-import type { BranchId, GraphState, ImportedTurn, TurnNodeId } from './types.ts'
+import { PAContextWindow } from './PAContextWindow.tsx'
+import type { GraphRepository } from './repository.ts'
+import { extractCompletedTurns } from './extract.ts'
+import { nodeLabelMap } from './labels.ts'
+import { assembleProjectGraph } from './project-graph.ts'
+import { localized, useLocale } from './i18n.ts'
+import type { GraphState, ImportedTurn, TurnNodeId } from './types.ts'
 
-/** Browser callbacks and observable supplied from the plugin apply closure. */
+export interface ProjectGraphLoad {
+  readonly response: ProjectGraphResponse
+  readonly sessionTitles: Readonly<Record<string, string>>
+}
+
+export interface MergeDraftTransfer {
+  readonly text: string
+  readonly draftRevision: number
+  readonly imageIds: readonly DraftAttachmentId[]
+  readonly hasStructuredReferences: boolean
+}
+
+/** Browser callbacks and observables supplied from the plugin apply closure. */
 export interface GraphViewInjected {
   readonly hooks: { graph: GraphRepository }
   readonly syncTurns: (turns: readonly ImportedTurn[]) => void
-  readonly toggleContext: (nodeId: TurnNodeId) => void
-  readonly moveContext: (nodeId: TurnNodeId, beforeId: TurnNodeId) => void
-  readonly moveContextToEnd: (nodeId: TurnNodeId) => void
-  readonly clearContext: () => void
-  readonly checkout: (nodeId: TurnNodeId) => void
-  readonly renameBranch: (branchId: BranchId, name: string) => void
-  readonly ask: (question: string, manifest: readonly TurnNodeId[]) => Promise<void>
+  readonly adoptObservedGraph: (state: GraphState) => void
+  readonly loadProjectGraph: (signal: AbortSignal) => Promise<ProjectGraphLoad | null>
+  readonly loadHistoryPreview: (
+    sources: readonly HistoryTurnSource[], signal: AbortSignal,
+  ) => Promise<HistoryPreviewResponse>
+  readonly loadPreviewImage: (
+    sourceSessionId: string, attachment: HistoryPreviewImageAttachment,
+  ) => Promise<LoadedPreviewImage>
+  /** Returns whether the composer is free after the requested lease change. */
+  readonly setComposerBlocked: (blocked: boolean) => boolean
+  readonly createMergedSession: (
+    manifest: readonly TurnNodeId[], draft: MergeDraftTransfer, signal: AbortSignal,
+  ) => Promise<void>
 }
 
-function BranchControls({
-  branchId, name, current, onCheckout, onRename, locale,
-}: {
-  readonly branchId: BranchId
-  readonly name: string
-  readonly current: boolean
-  readonly onCheckout: () => void
-  readonly onRename: (branchId: BranchId, name: string) => void
-  readonly locale: Locale
-}) {
-  const [draft, setDraft] = useState(name)
-  const commit = (): void => {
-    const normalized = draft.trim()
-    if (normalized === '') setDraft(name)
-    else onRename(branchId, normalized)
+function distinct(ids: readonly TurnNodeId[]): TurnNodeId[] {
+  return [...new Set(ids)]
+}
+
+function sessionHistory(state: GraphState, sessionId: string): TurnNodeId[] {
+  return distinct(Object.entries(state.sessionTurnRefs[sessionId] ?? {})
+    .sort(([left], [right]) => Number(left) - Number(right))
+    .flatMap(([, nodeId]) => state.nodes[nodeId] === undefined ? [] : [nodeId]))
+}
+
+function sameIds(left: readonly TurnNodeId[], right: readonly TurnNodeId[]): boolean {
+  return left.length === right.length && left.every((id, index) => id === right[index])
+}
+
+function sourceOf(state: GraphState, nodeId: TurnNodeId): HistoryTurnSource | null {
+  const node = state.nodes[nodeId]
+  return node === undefined ? null : {
+    sourceSessionId: node.sessionId,
+    sourceTurn: node.turn,
+    sourceBoundarySeq: node.boundarySeq,
   }
-  return <div className="dsh-git-inspector-actions">
-    <input
-      className="dsh-git-branch-name"
-      aria-label={localized('Branch 名称', 'Branch name', locale)}
-      value={draft}
-      onChange={event => setDraft(event.target.value)}
-      onBlur={commit}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter') event.currentTarget.blur()
-        if (event.key === 'Escape') { setDraft(name); event.currentTarget.blur() }
-      }}
-    />
-    <button className="dsh-git-button" type="button" disabled={current} onClick={onCheckout}>
-      {current ? localized('当前 HEAD', 'Current HEAD', locale) : localized('切换到此分支', 'Switch to this branch', locale)}
-    </button>
-  </div>
 }
 
-/** Complete graph view registered as one conversation tab. */
+function isAbort(cause: unknown, signal: AbortSignal): boolean {
+  return signal.aborted
+    || (typeof cause === 'object' && cause !== null && 'name' in cause && cause.name === 'AbortError')
+}
+
+/** Complete Branches workbench: graph selection, read-only history, and Merge. */
 export function GraphView({
-  useSession, useGraph, syncTurns, toggleContext, moveContext, moveContextToEnd,
-  clearContext, checkout, renameBranch, ask,
+  sessionId, useSession, useInput, inputActions, useGraph, syncTurns,
+  adoptObservedGraph, loadProjectGraph, loadHistoryPreview, loadPreviewImage,
+  setComposerBlocked, createMergedSession,
 }: ConvViewProps & InjectFace<GraphViewInjected>) {
   const locale = useLocale()
   const snapshot = useSession(value => value)
-  const state = useGraph((value: GraphState) => value)
+  const input = useInput(value => value)
+  const localState = useGraph((value: GraphState) => value)
   const turns = useMemo(() => extractCompletedTurns(snapshot), [snapshot])
-  const signature = turns.map(turn => `${turn.turn}:${turn.boundarySeq}:${turn.answer.length}`).join('|')
+  const turnSignature = turns.map(turn => `${turn.turn}:${turn.boundarySeq}:${turn.answer.length}`).join('|')
+
+  const [project, setProject] = useState<ProjectGraphLoad | null>(null)
+  const [projectError, setProjectError] = useState<string | null>(null)
+  const [selectedIds, setSelectedIds] = useState<TurnNodeId[]>([])
+  const [baselineIds, setBaselineIds] = useState<TurnNodeId[]>([])
+  const [selectionTouched, setSelectionTouched] = useState(false)
+  const [candidateId, setCandidateId] = useState<TurnNodeId | null>(null)
+  const [inspectedId, setInspectedId] = useState<TurnNodeId | null>(null)
+  const [preview, setPreview] = useState<HistoryPreviewResponse | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewError, setPreviewError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [inspectedNodeId, setInspectedNodeId] = useState<TurnNodeId | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const mergeAbortRef = useRef<AbortController | null>(null)
 
-  useEffect(() => { syncTurns(turns) }, [signature, syncTurns])
+  useEffect(() => () => { mergeAbortRef.current?.abort() }, [])
 
-  const inspected = inspectedNodeId === null ? undefined : state.nodes[inspectedNodeId]
-  const inspectedBranch = inspected === undefined ? undefined : state.branches[inspected.branchId]
+  useEffect(() => { syncTurns(turns) }, [turnSignature, syncTurns])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    setProjectError(null)
+    void loadProjectGraph(controller.signal).then((loaded) => {
+      if (!controller.signal.aborted) setProject(loaded)
+    }).catch((cause: unknown) => {
+      if (controller.signal.aborted) return
+      setProjectError(cause instanceof Error ? cause.message : String(cause))
+    })
+    return () => controller.abort()
+  }, [sessionId, loadProjectGraph])
+
+  const projectModel = useMemo(() => project === null
+    ? null
+    : assembleProjectGraph(project.response, localState, project.sessionTitles), [project, localState])
+  const state = projectModel?.state ?? localState
+
+  useEffect(() => {
+    if (projectModel !== null) adoptObservedGraph(projectModel.state)
+  }, [projectModel, adoptObservedGraph])
+
+  const currentSessionIds = useMemo(() => sessionHistory(state, String(sessionId)), [state, sessionId])
+  const currentSessionKey = currentSessionIds.join('\u0000')
+  useEffect(() => {
+    if (selectionTouched) return
+    setBaselineIds(currentSessionIds)
+    setSelectedIds(currentSessionIds)
+  }, [currentSessionKey, selectionTouched])
+
+  // A candidate that was only inspected and then closed is not a lasting edit.
+  // Re-arm baseline following so a later official turn joins the blue history.
+  useEffect(() => {
+    if (selectionTouched && candidateId === null && sameIds(selectedIds, baselineIds)) {
+      setSelectionTouched(false)
+    }
+  }, [selectionTouched, candidateId, selectedIds, baselineIds])
+
   const labels = useMemo(() => nodeLabelMap(state), [state])
-  const submit = async (question: string): Promise<void> => {
+  const dirty = candidateId !== null || !sameIds(selectedIds, baselineIds)
+  const orderedPreviewIds = useMemo(() => candidateId === null || selectedIds.includes(candidateId)
+    ? selectedIds
+    : [...selectedIds, candidateId], [selectedIds, candidateId])
+  const previewKey = orderedPreviewIds.map(nodeId => {
+    const source = sourceOf(state, nodeId)
+    return source === null ? `missing:${nodeId}` : `${source.sourceSessionId}:${source.sourceTurn}:${source.sourceBoundarySeq}`
+  }).join('|')
+
+  const composerBlocked = dirty || busy
+  useEffect(() => {
+    setComposerBlocked(composerBlocked)
+    return () => { setComposerBlocked(false) }
+  }, [composerBlocked, setComposerBlocked, locale])
+
+  useEffect(() => {
+    const sources = orderedPreviewIds.flatMap(nodeId => {
+      const source = sourceOf(state, nodeId)
+      return source === null ? [] : [source]
+    })
+    if (sources.length === 0) {
+      setPreview(null)
+      setPreviewLoading(false)
+      setPreviewError(null)
+      return
+    }
+    if (sources.length > MAX_MERGED_HISTORY_TURNS) {
+      setPreview(null)
+      setPreviewLoading(false)
+      setPreviewError(localized(
+        `单次 Merge 最多支持 ${MAX_MERGED_HISTORY_TURNS} 个 PA；请移除部分 PA。`,
+        `One Merge supports up to ${MAX_MERGED_HISTORY_TURNS} PAs. Remove some PAs to continue.`, locale,
+      ))
+      return
+    }
+    const controller = new AbortController()
+    setPreview(null)
+    setPreviewLoading(true)
+    setPreviewError(null)
+    void loadHistoryPreview(sources, controller.signal).then((response) => {
+      if (controller.signal.aborted) return
+      setPreview(response)
+      setPreviewLoading(false)
+    }).catch((cause: unknown) => {
+      if (controller.signal.aborted) return
+      setPreviewError(cause instanceof Error ? cause.message : String(cause))
+      setPreviewLoading(false)
+    })
+    return () => controller.abort()
+  }, [previewKey, loadHistoryPreview, locale])
+
+  const inspect = (nodeId: TurnNodeId): void => {
+    if (busy) return
+    setActionError(null)
+    setInspectedId(nodeId)
+    if (selectedIds.includes(nodeId)) {
+      setCandidateId(null)
+      return
+    }
+    setCandidateId(nodeId)
+    setSelectionTouched(true)
+  }
+
+  const closeInspector = (): void => {
+    const closingId = inspectedId
+    if (candidateId === inspectedId) setCandidateId(null)
+    setInspectedId(null)
+    if (closingId !== null) {
+      const trigger = [...document.querySelectorAll<HTMLButtonElement>('.dsh-git-tree-node')]
+        .find(button => button.dataset.nodeId === closingId)
+      trigger?.focus()
+    }
+  }
+
+  const addCandidate = (): void => {
+    if (busy) return
+    if (candidateId === null || state.nodes[candidateId] === undefined) return
+    setSelectedIds(ids => ids.includes(candidateId) ? ids : [...ids, candidateId])
+    setCandidateId(null)
+    setSelectionTouched(true)
+  }
+
+  const remove = (nodeId: TurnNodeId): void => {
+    if (busy) return
+    setSelectedIds(ids => ids.filter(id => id !== nodeId))
+    if (inspectedId === nodeId) setInspectedId(null)
+    if (candidateId === nodeId) setCandidateId(null)
+    setSelectionTouched(true)
+  }
+
+  const move = (nodeId: TurnNodeId, beforeId: TurnNodeId): void => {
+    if (busy) return
+    setSelectedIds(ids => {
+      if (nodeId === beforeId || !ids.includes(nodeId)) return ids
+      const next = ids.filter(id => id !== nodeId)
+      const index = next.indexOf(beforeId)
+      if (index < 0) return ids
+      next.splice(index, 0, nodeId)
+      return next
+    })
+    setSelectionTouched(true)
+  }
+
+  const moveEnd = (nodeId: TurnNodeId): void => {
+    if (busy) return
+    setSelectedIds(ids => ids.includes(nodeId) ? [...ids.filter(id => id !== nodeId), nodeId] : ids)
+    setSelectionTouched(true)
+  }
+
+  const discard = (send: boolean): void => {
+    const composerAvailable = setComposerBlocked(false)
+    setSelectedIds(currentSessionIds)
+    setBaselineIds(currentSessionIds)
+    setSelectionTouched(false)
+    setCandidateId(null)
+    setInspectedId(null)
+    setActionError(send && !composerAvailable ? localized(
+      '来源 Session 仍被其他系统条件阻塞；Context 更改已放弃，请解除阻塞后使用官方输入框发送。',
+      'Another system condition still blocks the source Session. The context edits were discarded; resolve that block, then send with the official composer.', locale,
+    ) : null)
+    if (send && composerAvailable) inputActions.submit()
+  }
+
+  const merge = async (): Promise<void> => {
+    if (busy || selectedIds.length === 0 || candidateId !== null) return
+    if (input.phase !== 'plain') {
+      setActionError(localized(
+        '官方输入框正在处理另一项操作；请等待输入状态稳定后再 Merge。',
+        'The official composer is handling another operation. Wait for it to settle before merging.', locale,
+      ))
+      return
+    }
+    if (selectedIds.length > MAX_MERGED_HISTORY_TURNS) {
+      setActionError(localized(
+        `单次 Merge 最多支持 ${MAX_MERGED_HISTORY_TURNS} 个 PA；请移除部分 PA。`,
+        `One Merge supports up to ${MAX_MERGED_HISTORY_TURNS} PAs. Remove some PAs to continue.`, locale,
+      ))
+      return
+    }
+    const controller = new AbortController()
+    mergeAbortRef.current?.abort()
+    mergeAbortRef.current = controller
     setBusy(true)
-    setError(null)
+    setActionError(null)
     try {
-      await ask(question, state.contextManifest)
+      if (input.occurrences.length > 0) {
+        throw new Error(localized(
+          '输入草稿包含 @ 引用或其他结构化 chip；请先移除或转换为普通文本再 Merge。',
+          'The draft contains @ references or other structured chips. Remove them or convert them to plain text before merging.', locale,
+        ))
+      }
+      await createMergedSession(selectedIds, {
+        text: input.draft,
+        draftRevision: input.draftRev,
+        imageIds: input.imageIds,
+        hasStructuredReferences: false,
+      }, controller.signal)
     } catch (cause: unknown) {
-      setError(cause instanceof Error ? cause.message : String(cause))
-      throw cause
+      if (!isAbort(cause, controller.signal)) {
+        setActionError(cause instanceof Error ? cause.message : String(cause))
+      }
     } finally {
+      if (mergeAbortRef.current === controller) mergeAbortRef.current = null
       setBusy(false)
     }
   }
 
+  const inspected = inspectedId === null ? undefined : state.nodes[inspectedId]
+  const inspectedSelected = inspectedId !== null && selectedIds.includes(inspectedId)
+  const canvasState: GraphState = {
+    ...state,
+    headNodeId: baselineIds.at(-1) ?? state.headNodeId,
+    contextManifest: [],
+  }
+  const draftHasContent = input.draft.trim() !== '' || input.imageIds.length > 0
+
   return <div className="dsh-git-root" data-conversation-composer-overlay="">
-    <div className={`dsh-git-workbench ${inspected === undefined ? '' : 'dsh-git-workbench-open'}`}>
-      <section className="dsh-git-panel" aria-label="Conversation Graph">
+    <div className="dsh-git-workbench">
+      <div className={`dsh-git-branch-left ${inspected === undefined ? '' : 'dsh-git-branch-left-open'}`}>
+        <section className="dsh-git-graph-panel" aria-label="Conversation Graph">
+          <header className="dsh-git-heading">
+            <span>Conversation Graph</span>
+            <span className="dsh-git-muted">{projectError ?? localized('蓝色：已加入 · 绿色：预览', 'Blue: included · green: preview', locale)}</span>
+          </header>
+          <GraphCanvas
+            state={canvasState}
+            previewNodeId={inspectedId}
+            selectedNodeIds={selectedIds}
+            candidateNodeId={candidateId}
+            disabled={busy}
+            onPreview={inspect}
+          />
+        </section>
+        {inspected === undefined || inspectedId === null ? null : <PAContextWindow
+          state={state}
+          nodeId={inspectedId}
+          label={labels.get(inspectedId) ?? 'PA'}
+          selected={inspectedSelected}
+          disabled={busy}
+          onAdd={addCandidate}
+          onRemove={() => remove(inspectedId)}
+          onClose={closeInspector}
+        />}
+      </div>
+      <section className="dsh-git-chat-panel" aria-label="Chat History">
         <header className="dsh-git-heading">
-          <span>Conversation Graph</span>
-          <span className="dsh-git-muted">{localized('点击节点查看 Context · 虚线为 merge', 'Click a node to view Context · dashed lines are merges', locale)}</span>
+          <span>Chat History</span>
+          <span className="dsh-git-muted">
+            {selectedIds.length} {localized('已加入', 'included', locale)}
+            {candidateId === null ? '' : localized(' + 1 预览', ' + 1 preview', locale)}
+          </span>
         </header>
-        <GraphCanvas state={state} previewNodeId={inspectedNodeId} onPreview={setInspectedNodeId} />
+        <ChatHistoryPreview
+          response={preview}
+          orderedNodeIds={orderedPreviewIds}
+          labels={labels}
+          candidateNodeId={candidateId}
+          loading={previewLoading}
+          error={previewError}
+          loadImage={loadPreviewImage}
+        />
       </section>
-      {inspected === undefined ? null : <aside className="dsh-git-panel" aria-label={localized('节点 Context', 'Node Context', locale)}>
-        <header className="dsh-git-heading">
-          <span>{labels.get(inspected.id) ?? 'PA'} Context</span>
-          <button className="dsh-git-close" type="button" aria-label={localized('关闭节点 Context', 'Close Node Context', locale)} onClick={() => setInspectedNodeId(null)}>×</button>
-        </header>
-          <div className="dsh-git-inspector">
-            <h3>{inspected.prompt || localized('（无文字问题）', '(No text prompt)', locale)}</h3>
-            <div className="dsh-git-node-hash">
-              <span>HASH</span>
-              <code>{nodeHash(inspected.id)}</code>
-            </div>
-            {inspectedBranch === undefined ? null : <BranchControls
-              key={inspectedBranch.id}
-              branchId={inspectedBranch.id}
-              name={inspectedBranch.name}
-              current={inspected.id === state.headNodeId}
-              locale={locale}
-              onCheckout={() => checkout(inspected.id)}
-              onRename={renameBranch}
-            />}
-            <button className="dsh-git-button" type="button" onClick={() => toggleContext(inspected.id)}>
-              {state.contextManifest.includes(inspected.id) ? localized('从 Context Tray 移除', 'Remove from Context Tray', locale) : localized('加入 Context Tray', 'Add to Context Tray', locale)}
-            </button>
-            <section className="dsh-git-context-history" aria-label={localized('回答时使用的 Context', 'Context used for this answer', locale)}>
-              <span className="dsh-git-message-label">{localized('回答时使用的 CONTEXT', 'CONTEXT USED FOR THIS ANSWER', locale)}</span>
-              {inspected.contextManifest.length === 0
-                ? <div className="dsh-git-muted">{localized('该节点没有前置 Context。', 'This node has no preceding Context.', locale)}</div>
-                : <ol>{inspected.contextManifest.map(nodeId => {
-                  const contextNode = state.nodes[nodeId]
-                  if (contextNode === undefined) return null
-                  return <li key={nodeId}>
-                    <strong>{labels.get(nodeId) ?? 'PA'}</strong>
-                    <span>{contextNode.prompt || localized('（无文字问题）', '(No text prompt)', locale)}</span>
-                  </li>
-                })}</ol>}
-            </section>
-            <div className="dsh-git-message">
-              <span className="dsh-git-message-label">PROMPT</span>
-              <MarkdownText text={inspected.prompt || localized('（无文字问题）', '(No text prompt)', locale)} />
-            </div>
-            <div className="dsh-git-message">
-              <span className="dsh-git-message-label">ANSWER</span>
-              <MarkdownText text={inspected.answer || localized('（没有文字回答）', '(No text answer)', locale)} />
-            </div>
-            <div className="dsh-git-muted">{localized('父节点', 'parents', locale)}: {inspected.parentIds.length || 0} · context: {inspected.contextManifest.length || 0}</div>
-          </div>
-      </aside>}
     </div>
     <ContextTray
       state={state}
+      selectedIds={selectedIds}
+      candidateId={candidateId}
       busy={busy}
-      error={error}
-      onMove={moveContext}
-      onMoveEnd={moveContextToEnd}
-      onRemove={toggleContext}
-      onClear={clearContext}
-      onAsk={submit}
+      error={actionError}
+      dirty={dirty}
+      draftHasContent={draftHasContent}
+      overLimit={selectedIds.length > MAX_MERGED_HISTORY_TURNS}
+      onMove={move}
+      onMoveEnd={moveEnd}
+      onRemove={remove}
+      onClear={() => { setSelectedIds([]); setCandidateId(null); setInspectedId(null); setSelectionTouched(true) }}
+      onMerge={merge}
+      onDiscard={discard}
     />
   </div>
 }

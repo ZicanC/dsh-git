@@ -2,7 +2,7 @@ import { primaryPath } from './graph.ts'
 import type { GraphTransport } from './graph-transport.ts'
 import { EMPTY_GRAPH_STATE } from './types.ts'
 import type {
-  BranchId, GraphState, ImportedTurn, PrepareBranchInput, TurnNode, TurnNodeId,
+  BranchId, GraphState, ImportedTurn, PrepareMergedSessionInput, TurnNode, TurnNodeId,
 } from './types.ts'
 
 const EMPTY_STATE = EMPTY_GRAPH_STATE
@@ -100,6 +100,40 @@ export class GraphRepository {
     this.run(() => { this.syncSessionNow(sessionId, turns) })
   }
 
+  /**
+   * Adopt a complete Host-observed Workspace graph without replacing local
+   * branch names, pending merge metadata, or transient view state.
+   *
+   * Project assembly reuses every known browser id before minting fallback
+   * ids, so this union also makes previously unopened Session turns available
+   * to a later merged child without duplicating them in the ledger.
+   */
+  adoptObservedGraph(observed: GraphState): void {
+    this.run(() => {
+      const sessionTurnRefs = { ...observed.sessionTurnRefs }
+      for (const [sessionId, refs] of Object.entries(this.state.sessionTurnRefs)) {
+        sessionTurnRefs[sessionId] = { ...(sessionTurnRefs[sessionId] ?? {}), ...refs }
+      }
+      const nodes = { ...observed.nodes, ...this.state.nodes }
+      const headNodeId = this.state.headNodeId !== null && nodes[this.state.headNodeId] !== undefined
+        ? this.state.headNodeId
+        : observed.headNodeId
+      const previewNodeId = this.state.previewNodeId !== null && nodes[this.state.previewNodeId] !== undefined
+        ? this.state.previewNodeId
+        : null
+      const next: GraphState = {
+        ...this.state,
+        nodes,
+        branches: { ...observed.branches, ...this.state.branches },
+        sessionBranches: { ...observed.sessionBranches, ...this.state.sessionBranches },
+        sessionTurnRefs,
+        headNodeId,
+        previewNodeId,
+      }
+      if (JSON.stringify(next) !== JSON.stringify(this.state)) this.commit(next)
+    })
+  }
+
   private syncSessionNow(sessionId: string, turns: readonly ImportedTurn[]): void {
     let next = this.state
     const knownRefs = { ...(next.sessionTurnRefs[sessionId] ?? {}) }
@@ -147,7 +181,7 @@ export class GraphRepository {
         id: nodeId,
         sessionId,
         turn: turn.turn,
-        prompt: merge?.prompt ?? turn.prompt,
+        prompt: turn.prompt,
         answer: turn.answer,
         createdAt: turn.createdAt,
         boundarySeq: turn.boundarySeq,
@@ -280,16 +314,17 @@ export class GraphRepository {
     if (JSON.stringify(next) !== JSON.stringify(this.state)) this.commit(next)
   }
 
-  /** Record an auto-created child session before its first merged request completes. */
-  prepareBranch(input: PrepareBranchInput): void {
-    this.run(() => { this.prepareBranchNow(input) })
+  /** Register a merged child Session before its first new official turn. */
+  prepareMergedSession(input: PrepareMergedSessionInput): void {
+    this.run(() => { this.prepareMergedSessionNow(input) })
   }
 
-  private prepareBranchNow(input: PrepareBranchInput): void {
+  private prepareMergedSessionNow(input: PrepareMergedSessionInput): void {
     const inherited: Record<number, TurnNodeId> = {}
     for (const [index, nodeId] of distinct(input.importedNodeIds).entries()) {
       if (this.state.nodes[nodeId] !== undefined) inherited[index + 1] = nodeId
     }
+    const inheritedHeadId = Object.values(inherited).at(-1) ?? input.primaryParentId
     const branchId = id('branch') as BranchId
     this.commit({
       ...this.state,
@@ -299,7 +334,7 @@ export class GraphRepository {
           id: branchId,
           name: `merge-${Object.keys(this.state.branches).length + 1}`,
           sessionId: input.childSessionId,
-          headId: input.baseNodeId,
+          headId: inheritedHeadId,
           color: Object.keys(this.state.branches).length % 8,
           createdAt: Date.now(),
         },
@@ -313,14 +348,13 @@ export class GraphRepository {
           parentIds: distinct(input.parentIds),
           primaryParentId: input.primaryParentId,
           contextManifest: [...input.contextManifest],
-          prompt: input.prompt,
         },
       },
-      headNodeId: input.baseNodeId,
+      headNodeId: inheritedHeadId,
     })
   }
 
-  /** Remove a pending merge after a rejected prompt. */
+  /** Remove pending metadata for an abandoned merged Session. */
   abortPending(sessionId: string): void {
     this.run(() => {
       if (this.state.pendingMerges[sessionId] === undefined) return
