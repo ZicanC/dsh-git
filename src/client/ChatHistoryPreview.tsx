@@ -27,6 +27,8 @@ export interface ChatHistoryPreviewProps {
   readonly orderedNodeIds: readonly TurnNodeId[]
   readonly labels: ReadonlyMap<TurnNodeId, string>
   readonly candidateNodeId: TurnNodeId | null
+  /** PA currently stretched open in the adjacent conversation rail. */
+  readonly activeNodeId?: TurnNodeId | null
   readonly loading: boolean
   readonly error: string | null
   readonly loadImage: (sourceSessionId: string, attachment: HistoryPreviewImageAttachment) => Promise<LoadedPreviewImage>
@@ -435,10 +437,11 @@ function TurnRecords({
 
 /** Read-only, official-style projection of the exact turns a Merge will seed. */
 export function ChatHistoryPreview({
-  response, orderedNodeIds, labels, candidateNodeId, loading, error, loadImage,
+  response, orderedNodeIds, labels, candidateNodeId, activeNodeId = null, loading, error, loadImage,
 }: ChatHistoryPreviewProps) {
   const locale = useLocale()
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const turnRefs = useRef(new Map<TurnNodeId, HTMLElement>())
   const atBottomRef = useRef(true)
   const [atBottom, setAtBottom] = useState(true)
 
@@ -453,6 +456,13 @@ export function ChatHistoryPreview({
   useLayoutEffect(() => {
     if (response !== null && atBottomRef.current) scrollToBottom()
   }, [response])
+
+  useEffect(() => {
+    if (activeNodeId === null) return
+    const element = turnRefs.current.get(activeNodeId)
+    if (element === undefined || typeof element.scrollIntoView !== 'function') return
+    element.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [activeNodeId, response])
 
   if (loading && response === null) {
     return <div className="dsh-git-chat-status" role="status">{localized('正在读取完整 Chat History…', 'Loading complete Chat History…', locale)}</div>
@@ -485,8 +495,16 @@ export function ChatHistoryPreview({
           : localized('已加入', 'included', locale)
         return <section
           className="dsh-git-preview-turn"
+          id={nodeId === undefined ? undefined : `dsh-git-history-${nodeId}`}
           key={`${turn.source.sourceSessionId}:${turn.source.sourceTurn}:${turn.source.sourceBoundarySeq}`}
+          ref={(element) => {
+            if (nodeId === undefined) return
+            if (element === null) turnRefs.current.delete(nodeId)
+            else turnRefs.current.set(nodeId, element)
+          }}
           data-preview-state={candidate ? 'candidate' : 'selected'}
+          data-node-id={nodeId}
+          data-rail-active={nodeId !== undefined && nodeId === activeNodeId ? '' : undefined}
           aria-label={`${label} · ${stateLabel}`}
         >
           <header className="dsh-git-preview-turn-head">

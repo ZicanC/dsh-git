@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { GraphCanvas } from '../src/client/GraphCanvas.tsx'
+import { STYLES } from '../src/client/styles.ts'
 import { graph, node } from './fixtures.ts'
 
 afterEach(cleanup)
@@ -82,5 +83,12 @@ describe('GraphCanvas selection presentation', () => {
     expect(button.classList.contains('dsh-git-tree-node-selected')).toBe(true)
     expect(button.classList.contains('dsh-git-tree-node-candidate')).toBe(false)
     expect(button.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('binds every workbench selection state to an explicit gray, blue, or green rule', () => {
+    expect(STYLES).toContain('.dsh-git-tree-node[data-selection-state="unselected"]{border-inline-start:2px solid var(--dsh-git-state-excluded)')
+    expect(STYLES).toContain('.dsh-git-tree-node[data-selection-state="selected"]{border-inline-start:2px solid var(--dsh-git-state-included)')
+    expect(STYLES).toContain('.dsh-git-tree-node[data-selection-state="candidate"]{border-inline-start:2px dashed var(--dsh-git-state-preview)')
+    expect(STYLES).toContain('.dsh-git-tree-node:not([data-selection-state])[style*="--dsh-git-node-color"]{border-inline-start:4px solid var(--dsh-git-node-color)}')
   })
 })

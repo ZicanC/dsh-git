@@ -9,9 +9,11 @@ export interface ChatHistoryPreviewProps {
     readonly orderedNodeIds: readonly TurnNodeId[];
     readonly labels: ReadonlyMap<TurnNodeId, string>;
     readonly candidateNodeId: TurnNodeId | null;
+    /** PA currently stretched open in the adjacent conversation rail. */
+    readonly activeNodeId?: TurnNodeId | null;
     readonly loading: boolean;
     readonly error: string | null;
     readonly loadImage: (sourceSessionId: string, attachment: HistoryPreviewImageAttachment) => Promise<LoadedPreviewImage>;
 }
 /** Read-only, official-style projection of the exact turns a Merge will seed. */
-export declare function ChatHistoryPreview({ response, orderedNodeIds, labels, candidateNodeId, loading, error, loadImage, }: ChatHistoryPreviewProps): import("react").JSX.Element;
+export declare function ChatHistoryPreview({ response, orderedNodeIds, labels, candidateNodeId, activeNodeId, loading, error, loadImage, }: ChatHistoryPreviewProps): import("react").JSX.Element;

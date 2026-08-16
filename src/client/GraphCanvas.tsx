@@ -4,10 +4,12 @@ import { nodeLabelMap } from './labels.ts'
 import { localized, useLocale } from './i18n.ts'
 import type { GraphState, TurnNodeId } from './types.ts'
 
-const NODE_WIDTH = 72
+// Nodes are readable text blocks, not chips: the accent lives on a 2px
+// inline-start bar, so the box itself has to carry a label at rest.
+const NODE_WIDTH = 132
 const NODE_HEIGHT = 42
-const HORIZONTAL_GAP = 28
-const VERTICAL_GAP = 78
+const HORIZONTAL_GAP = 24
+const VERTICAL_GAP = 58
 const STAGE_PADDING = 32
 
 interface TreePosition {
@@ -203,8 +205,9 @@ export function GraphCanvas({
           data-selection-state={selectionMode ? selectionState : undefined}
           onClick={() => onPreview(node.id)}
         >
-          <span>{label}</span>
+          <span className="dsh-git-tree-node-label">{label}</span>
           {isHead ? <span className="dsh-git-tree-head">HEAD</span> : null}
+          {isCandidate ? <span className="dsh-git-tree-node-tag">{localized('预览', 'preview', locale)}</span> : null}
         </button>
       })}
       </div>

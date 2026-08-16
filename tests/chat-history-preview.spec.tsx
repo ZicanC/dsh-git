@@ -6,6 +6,7 @@ import {
   type ChatHistoryPreviewProps,
 } from '../src/client/ChatHistoryPreview.tsx'
 import { installLocaleSource } from '../src/client/i18n.ts'
+import { STYLES } from '../src/client/styles.ts'
 import type { HistoryPreviewRecord, HistoryPreviewResponse } from '../src/protocol.ts'
 import type { TurnNodeId } from '../src/client/types.ts'
 
@@ -38,7 +39,11 @@ afterEach(() => {
   uninstallLocale = undefined
 })
 
-function renderTurns(turns: readonly PreviewTurn[], candidateNodeId: TurnNodeId | null = null) {
+function renderTurns(
+  turns: readonly PreviewTurn[],
+  candidateNodeId: TurnNodeId | null = null,
+  activeNodeId: TurnNodeId | null = null,
+) {
   const response: HistoryPreviewResponse = {
     turns: turns.map((turn, index) => ({
       source: {
@@ -55,6 +60,7 @@ function renderTurns(turns: readonly PreviewTurn[], candidateNodeId: TurnNodeId 
     orderedNodeIds={turns.map(turn => turn.id)}
     labels={new Map(turns.map(turn => [turn.id, turn.label]))}
     candidateNodeId={candidateNodeId}
+    activeNodeId={activeNodeId}
     loading={false}
     error={null}
     loadImage={unavailableImage}
@@ -205,6 +211,18 @@ describe('ChatHistoryPreview official-style projection', () => {
     expect(selected.getAttribute('aria-label')).toBe('PA1 · included')
     expect(candidate.getAttribute('data-preview-state')).toBe('candidate')
     expect(candidate.getAttribute('aria-label')).toBe('PA2 · dashed preview')
+    expect(STYLES).toContain('.dsh-git-preview-turn[data-preview-state="selected"]{border-inline-start:2px solid var(--dsh-git-state-included)}')
+    expect(STYLES).toContain('.dsh-git-preview-turn[data-preview-state="candidate"]{border-inline-start:2px dashed var(--dsh-git-state-preview)}')
+  })
+
+  it('marks the PA activated by the matching history-rail dash', () => {
+    renderTurns([
+      { id: firstId, label: 'PA1', records: [] },
+      { id: secondId, label: 'PA2', records: [] },
+    ], null, secondId)
+
+    expect(screen.getByLabelText('PA1 · included').getAttribute('data-rail-active')).toBeNull()
+    expect(screen.getByLabelText('PA2 · included').getAttribute('data-rail-active')).toBe('')
   })
 
   it('keeps orphan results, turn status, and future events accessible', () => {

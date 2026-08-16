@@ -144,6 +144,25 @@ describe('graph UI', () => {
     expect(preview).toHaveBeenCalledWith(one.id)
   })
 
+  it('toggles Conversation Graph from the button beside Chat History', () => {
+    const view = renderGraphView(graphViewFixture(state))
+    const chatHeading = screen.getByLabelText('Chat History').querySelector('.dsh-git-heading')
+    const close = within(chatHeading as HTMLElement)
+      .getByRole('button', { name: '关闭 Conversation Graph', expanded: true })
+
+    expect(screen.getByLabelText('Conversation Graph')).toBeTruthy()
+    fireEvent.click(close)
+
+    expect(screen.queryByLabelText('Conversation Graph')).toBeNull()
+    expect(view.container.querySelector('.dsh-git-workbench-graph-closed')).toBeTruthy()
+    const open = within(chatHeading as HTMLElement)
+      .getByRole('button', { name: '打开 Conversation Graph', expanded: false })
+    fireEvent.click(open)
+
+    expect(screen.getByLabelText('Conversation Graph')).toBeTruthy()
+    expect(view.container.querySelector('.dsh-git-workbench-graph-closed')).toBeNull()
+  })
+
   it('keeps Context Tray compact until expanded, then exposes PA ordering controls', () => {
     const move = vi.fn()
     const tray = render(<ContextTray
@@ -266,6 +285,10 @@ describe('graph UI', () => {
     })
     expect(screen.getByRole('button', { name: '查看 PA3 context' }).getAttribute('data-selection-state')).toBe('unselected')
     await vi.waitFor(() => expect(view.container.querySelectorAll('[data-preview-state="selected"]')).toHaveLength(2))
+    const rail = [...view.container.querySelectorAll('.dsh-git-rail-dash')]
+    expect(rail.map(item => item.getAttribute('data-node-id'))).toEqual([one.id, two.id])
+    expect(rail.map(item => item.getAttribute('data-rail-state')))
+      .toEqual(['included', 'included'])
     expect(screen.getByText('Preview prompt 2')).toBeTruthy()
     expect(screen.getAllByRole('article', { name: '用户消息' })).toHaveLength(2)
     expect(screen.getAllByRole('article', { name: 'Assistant 消息' })).toHaveLength(2)
@@ -285,6 +308,9 @@ describe('graph UI', () => {
     expect(screen.getByLabelText('PA Context Window')).toBeTruthy()
     expect(screen.getByText('PA-ca11d')).toBeTruthy()
     expect(screen.getByText('2 已加入 + 1 预览')).toBeTruthy()
+    expect([...view.container.querySelectorAll('.dsh-git-rail-dash')]
+      .map(item => item.getAttribute('data-rail-state')))
+      .toEqual(['included', 'included', 'preview'])
     // The compact PA rail carries the candidate state, and the tray shows the dashed chip.
     expect(within(screen.getByLabelText('Context Tray')).getByText('PA3')).toBeTruthy()
     expect(screen.getByLabelText('Context Tray').querySelector('[data-preview="candidate"]')).toBeTruthy()
@@ -299,13 +325,18 @@ describe('graph UI', () => {
     expect(document.activeElement).toBe(pa3)
     expect(screen.queryByLabelText('PA Context Window')).toBeNull()
     expect(pa3.getAttribute('data-selection-state')).toBe('unselected')
+    expect([...view.container.querySelectorAll('.dsh-git-rail-dash')]
+      .map(item => item.getAttribute('data-node-id')))
+      .toEqual([one.id, two.id])
     fireEvent.click(pa3)
 
     fireEvent.click(screen.getByRole('button', { name: '加入 Context' }))
     expect(pa3.getAttribute('data-selection-state')).toBe('selected')
     expect(view.container.querySelector('[data-preview-state="candidate"]')).toBeNull()
     expect(screen.getByLabelText('Context Tray').querySelector('[data-preview="candidate"]')).toBeNull()
-    expect(screen.getByText('3 已加入')).toBeTruthy()
+    // The Chat History header and the miniature trail share the same selection.
+    const chatHeading = screen.getByLabelText('Chat History').querySelector('.dsh-git-heading')
+    expect(within(chatHeading as HTMLElement).getByText('3 已加入')).toBeTruthy()
     expect(screen.getByRole('button', { name: '移出 Context' })).toBeTruthy()
   })
 
@@ -324,7 +355,21 @@ describe('graph UI', () => {
     expect(screen.getByLabelText('Context Tray').querySelector('[data-preview="candidate"]')?.textContent).toContain('PA3')
     // The moved preview stays a preview: still dashed in the history, still uncounted.
     expect(screen.getByText('2 已加入 + 1 预览')).toBeTruthy()
-    await vi.waitFor(() => expect(view.container.querySelector('[data-preview-state="candidate"]')).toBeTruthy())
+    await vi.waitFor(() => {
+      const rail = [...view.container.querySelectorAll('.dsh-git-rail-dash')]
+      expect(rail.map(item => item.getAttribute('data-node-id'))).toEqual([one.id, three.id, two.id])
+      expect(rail.map(item => item.getAttribute('data-rail-state'))).toEqual(['included', 'preview', 'included'])
+      const history = [...view.container.querySelectorAll('.dsh-git-preview-turn')]
+      expect(history.map(item => item.getAttribute('data-node-id'))).toEqual([one.id, three.id, two.id])
+      expect(history.map(item => item.getAttribute('data-preview-state'))).toEqual(['selected', 'candidate', 'selected'])
+    })
+
+    const candidateDash = view.container.querySelector(`.dsh-git-rail-dash[data-node-id="${three.id}"]`) as HTMLElement
+    fireEvent.pointerEnter(candidateDash)
+    expect(candidateDash.getAttribute('data-active')).toBe('')
+    expect(view.container.querySelector(`.dsh-git-preview-turn[data-node-id="${three.id}"]`)?.getAttribute('data-rail-active')).toBe('')
+    fireEvent.pointerLeave(view.container.querySelector('.dsh-git-rail') as HTMLElement)
+    expect(view.container.querySelector(`.dsh-git-preview-turn[data-node-id="${three.id}"]`)?.getAttribute('data-rail-active')).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: '加入 Context' }))
     expect(chipLabels()).toEqual(['PA1', 'PA3', 'PA2'])
@@ -417,7 +462,8 @@ describe('graph UI', () => {
     expect(screen.queryByLabelText('界面语言')).toBeNull()
     localeSnapshot = { active: 'en', revision: 1 }
     act(() => { for (const listener of listeners) listener() })
-    expect(screen.getByText('Blue: included · green: preview')).toBeTruthy()
+    expect(screen.getByText('Included')).toBeTruthy()
+    expect(screen.getByText('Preview')).toBeTruthy()
     expect(screen.getByText(/2 PA · About \d+ tokens/)).toBeTruthy()
   })
 

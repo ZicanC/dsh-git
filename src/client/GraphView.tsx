@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { DraftAttachmentId } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import { IconPanelLeftOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace } from '@deepseek-ai/dsh-client-ui-slots'
 import type {
   HistoryPreviewImageAttachment, HistoryPreviewResponse, HistoryTurnSource, ProjectGraphResponse,
@@ -10,6 +11,8 @@ import { ChatHistoryPreview, type LoadedPreviewImage } from './ChatHistoryPrevie
 import type { ContextTrayProps } from './ContextTray.tsx'
 import type { ContextTrayChannel } from './context-tray-channel.ts'
 import { GraphCanvas } from './GraphCanvas.tsx'
+import { HistoryRail } from './HistoryRail.tsx'
+import { historyRailModel } from './history-rail.ts'
 import { PAContextWindow } from './PAContextWindow.tsx'
 import type { GraphRepository } from './repository.ts'
 import { extractCompletedTurns } from './extract.ts'
@@ -102,6 +105,8 @@ export function GraphView({
   // move it before deciding to add it, so it is not always the last entry.
   const [candidateIndex, setCandidateIndex] = useState(0)
   const [inspectedId, setInspectedId] = useState<TurnNodeId | null>(null)
+  const [graphOpen, setGraphOpen] = useState(true)
+  const [activeTrailId, setActiveTrailId] = useState<TurnNodeId | null>(null)
   const [preview, setPreview] = useState<HistoryPreviewResponse | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
@@ -166,6 +171,7 @@ export function GraphView({
     const source = sourceOf(state, nodeId)
     return source === null ? [] : [{ nodeId, source }]
   }), [orderedPreviewIds, state])
+  const previewNodeIds = useMemo(() => previewEntries.map(entry => entry.nodeId), [previewEntries])
   const previewKey = previewEntries.map(({ source }) =>
     `${source.sourceSessionId}:${source.sourceTurn}:${source.sourceBoundarySeq}`).join('|')
 
@@ -343,6 +349,15 @@ export function GraphView({
     headNodeId: baselineIds.at(-1) ?? state.headNodeId,
     contextManifest: [],
   }
+  const rail = useMemo(() => historyRailModel(state, {
+    selectedIds,
+    candidateId,
+    headNodeId: canvasState.headNodeId,
+    orderedIds: previewNodeIds,
+  }), [state, selectedIds, candidateId, canvasState.headNodeId, previewNodeIds])
+  useEffect(() => {
+    if (activeTrailId !== null && !previewNodeIds.includes(activeTrailId)) setActiveTrailId(null)
+  }, [activeTrailId, previewNodeIds])
   const draftHasContent = input.draft.trim() !== '' || input.imageIds.length > 0
   const trayModel: ContextTrayProps = {
     state,
@@ -379,12 +394,23 @@ export function GraphView({
   }, [tray])
 
   return <div className="dsh-git-root" data-conversation-composer-overlay="">
-    <div className="dsh-git-workbench">
-      <div className={`dsh-git-branch-left ${inspected === undefined ? '' : 'dsh-git-branch-left-open'}`}>
+    <div className={`dsh-git-workbench ${graphOpen ? '' : 'dsh-git-workbench-graph-closed'}`}>
+      {graphOpen && <div
+        id="dsh-git-conversation-graph"
+        className={`dsh-git-branch-left ${inspected === undefined ? '' : 'dsh-git-branch-left-open'}`}
+      >
         <section className="dsh-git-graph-panel" aria-label="Conversation Graph">
           <header className="dsh-git-heading">
             <span>Conversation Graph</span>
-            <span className="dsh-git-muted">{projectError ?? localized('蓝色：已加入 · 绿色：预览', 'Blue: included · green: preview', locale)}</span>
+            {projectError === null
+              ? <span className="dsh-git-legend">
+                <span className="dsh-git-legend-bar" aria-hidden="true" />
+                <span>{localized('已加入', 'Included', locale)}</span>
+                <span className="dsh-git-legend-dot" aria-hidden="true" />
+                <span className="dsh-git-legend-bar dsh-git-legend-bar-preview" aria-hidden="true" />
+                <span>{localized('预览', 'Preview', locale)}</span>
+              </span>
+              : <span className="dsh-git-muted">{projectError}</span>}
           </header>
           <GraphCanvas
             state={canvasState}
@@ -405,24 +431,47 @@ export function GraphView({
           onRemove={() => remove(inspectedId)}
           onClose={closeInspector}
         />}
-      </div>
+      </div>}
       <section className="dsh-git-chat-panel" aria-label="Chat History">
         <header className="dsh-git-heading">
-          <span>Chat History</span>
+          <span className="dsh-git-heading-title">
+            <span>Chat History</span>
+            <button
+              className="dsh-git-graph-toggle"
+              type="button"
+              aria-controls="dsh-git-conversation-graph"
+              aria-expanded={graphOpen}
+              aria-label={graphOpen
+                ? localized('关闭 Conversation Graph', 'Close Conversation Graph', locale)
+                : localized('打开 Conversation Graph', 'Open Conversation Graph', locale)}
+              onClick={() => setGraphOpen(open => !open)}
+            >
+              <IconPanelLeftOutline16 size={16} />
+            </button>
+          </span>
           <span className="dsh-git-muted">
             {selectedIds.length} {localized('已加入', 'included', locale)}
             {candidateId === null ? '' : localized(' + 1 预览', ' + 1 preview', locale)}
           </span>
         </header>
-        <ChatHistoryPreview
-          response={preview}
-          orderedNodeIds={previewEntries.map(entry => entry.nodeId)}
-          labels={labels}
-          candidateNodeId={candidateId}
-          loading={previewLoading}
-          error={previewError}
-          loadImage={loadPreviewImage}
-        />
+        <div className={`dsh-git-chat-body ${rail.entries.length === 0 ? '' : 'dsh-git-chat-body-rail'}`}>
+          <HistoryRail
+            {...rail}
+            disabled={busy}
+            onSelect={inspect}
+            onActiveChange={setActiveTrailId}
+          />
+          <ChatHistoryPreview
+            response={preview}
+            orderedNodeIds={previewNodeIds}
+            labels={labels}
+            candidateNodeId={candidateId}
+            activeNodeId={activeTrailId}
+            loading={previewLoading}
+            error={previewError}
+            loadImage={loadPreviewImage}
+          />
+        </div>
       </section>
     </div>
   </div>
