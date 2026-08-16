@@ -150,8 +150,8 @@ export function apply(ctx: Context): void {
         ctx.conversation.blocks,
         sessionId,
         () => localized(
-          'Context 尚未 Merge，或新 Chat 正在创建；请完成 Merge 或放弃更改。',
-          'Context is unmerged or a new Chat is being created; finish the Merge or discard the changes.',
+          '新 Chat 正在创建；草稿正在转移，请稍候。',
+          'A new Chat is being created; the draft is being transferred, please wait.',
         ),
       )
       const workspace = () => ctx.workspaces.list.getSnapshot().items

@@ -8,8 +8,9 @@ export interface ComposerDiscardActionInjected {
 }
 export type ComposerDiscardActionProps = PropsRuntime<'conversation.input.right'> & InjectFace<ComposerDiscardActionInjected>;
 /**
- * The escape hatch for an unmerged Context, seated in the composer tool row
- * beside the send button: the paused official composer is exactly where the
- * user looks for it. Selection state stays owned by the Branches view.
+ * The composer-row half of the unmerged-Context rule: the official composer
+ * keeps accepting text — the draft is what a Merge carries into the new Chat —
+ * while its send gestures are refused, leaving Merge and this discard-and-send
+ * button as the only two ways out.
  */
 export declare function ComposerDiscardAction({ useTray }: ComposerDiscardActionProps): import("react").JSX.Element | null;

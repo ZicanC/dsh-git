@@ -37,6 +37,21 @@ export function missingDirectDependencies(
   return [...missing]
 }
 
+/**
+ * Whether a selection joins lineages rather than continuing one.
+ *
+ * A selection drawn from a single Session — the current Chat's own history,
+ * trimmed or reordered — branches that lineage: that is a Fork. Only PAs
+ * pulled from a second Session make the new Chat a Merge.
+ */
+export function joinsLineages(state: GraphState, manifest: readonly TurnNodeId[]): boolean {
+  const sessions = new Set(manifest.flatMap((id) => {
+    const node = state.nodes[id]
+    return node === undefined ? [] : [node.sessionId]
+  }))
+  return sessions.size > 1
+}
+
 /** Assign stable lanes and parent edges for a compact GitLens-style graph. */
 export function layoutGraph(state: GraphState): GraphLayout {
   const nodes = orderedNodes(state)

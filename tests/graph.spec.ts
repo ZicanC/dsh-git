@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { layoutGraph, missingDirectDependencies, primaryPath } from '../src/client/graph.ts'
+import { joinsLineages, layoutGraph, missingDirectDependencies, primaryPath } from '../src/client/graph.ts'
 import { graph, node } from './fixtures.ts'
 
 describe('conversation graph', () => {
@@ -25,6 +25,16 @@ describe('conversation graph', () => {
 
   it('reports skipped direct dependencies without forcing them into the tray', () => {
     expect(missingDirectDependencies(state, ['pa1', 'pa3', 'pa4'])).toEqual(['pa2'])
+  })
+
+  it('separates a fork of one Session from a merge across two', () => {
+    const foreign = node({ id: 'pa5', sessionId: 'session-b', createdAt: 5 })
+    const spread = graph([one, two, three, merge, foreign])
+    expect(joinsLineages(spread, [])).toBe(false)
+    expect(joinsLineages(spread, ['pa1', 'pa3', 'pa4'])).toBe(false)
+    expect(joinsLineages(spread, ['pa1', 'pa5'])).toBe(true)
+    // A stale reference cannot invent a second lineage.
+    expect(joinsLineages(spread, ['pa1', 'missing'])).toBe(false)
   })
 
 })

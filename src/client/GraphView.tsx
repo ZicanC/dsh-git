@@ -169,11 +169,14 @@ export function GraphView({
   const previewKey = previewEntries.map(({ source }) =>
     `${source.sourceSessionId}:${source.sourceTurn}:${source.sourceBoundarySeq}`).join('|')
 
-  const composerBlocked = dirty || busy
+  // Only the Merge flight makes the official composer inert: the draft is being
+  // transferred, and any edit during it aborts the transfer. A merely unmerged
+  // Context keeps the composer typable — the composer-row guard refuses the
+  // send gestures instead, so the draft can be written before the Merge.
   useEffect(() => {
-    setComposerBlocked(composerBlocked)
+    setComposerBlocked(busy)
     return () => { setComposerBlocked(false) }
-  }, [composerBlocked, setComposerBlocked, locale])
+  }, [busy, setComposerBlocked, locale])
 
   useEffect(() => {
     const sources = previewEntries.map(entry => entry.source)
@@ -356,6 +359,12 @@ export function GraphView({
     onRemove: remove,
     onMerge: merge,
     onDiscard: discard,
+    onSendRefused: () => {
+      setActionError(localized(
+        'Context 尚未 Merge：官方输入框可以继续输入，但发送只能通过 Merge，或「放弃更改并发送」。',
+        'The Context is unmerged: the composer still accepts text, but sending goes through Merge or “Discard changes and send”.', locale,
+      ))
+    },
   }
 
   // The Branches view owns all mutable selection state; the official input

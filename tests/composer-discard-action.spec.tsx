@@ -36,6 +36,7 @@ function model(overrides: Partial<ContextTrayProps> = {}): ContextTrayProps {
     onRemove: () => {},
     onMerge: async () => {},
     onDiscard: () => {},
+    onSendRefused: () => {},
     ...overrides,
   }
 }
@@ -51,6 +52,38 @@ describe('ComposerDiscardAction', () => {
 
     act(() => { channel.publish({}, model({ dirty: true })) })
     expect(screen.getByRole('button', { name: '放弃更改并发送' })).toBeTruthy()
+  })
+
+  it('guards the surrounding composer card while the Context is unmerged', () => {
+    const channel = new ContextTrayChannel()
+    const onSendRefused = vi.fn()
+    // The action seats inside the official composer card; the guard finds it there.
+    const card = document.createElement('div')
+    card.dataset['composerCard'] = ''
+    const textarea = document.createElement('textarea')
+    card.appendChild(textarea)
+    document.body.appendChild(card)
+    const mount = document.createElement('div')
+    card.appendChild(mount)
+    render(<ActionHarness channel={channel} />, { container: mount })
+
+    const pressEnter = () => textarea.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+    )
+    act(() => { channel.publish({}, model({ onSendRefused })) })
+    expect(pressEnter()).toBe(true)
+
+    act(() => { channel.publish({}, model({ dirty: true, onSendRefused })) })
+    expect(pressEnter()).toBe(false)
+    expect(onSendRefused).toHaveBeenCalledTimes(1)
+
+    // A Merge in flight keeps the guard up even though the button is hidden.
+    act(() => { channel.publish({}, model({ busy: true, onSendRefused })) })
+    expect(screen.queryByRole('button')).toBeNull()
+    expect(pressEnter()).toBe(false)
+
+    act(() => { channel.clear({}) })
+    card.remove()
   })
 
   it('sends the source draft only when it has content, and locks while busy', () => {

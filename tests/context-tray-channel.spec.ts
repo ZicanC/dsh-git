@@ -21,6 +21,7 @@ function model(label: string): ContextTrayProps {
     onRemove: () => {},
     onMerge: async () => {},
     onDiscard: () => {},
+    onSendRefused: () => {},
   }
 }
 

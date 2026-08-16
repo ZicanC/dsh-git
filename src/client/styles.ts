@@ -58,6 +58,7 @@ export const STYLES = `
 .dsh-git-button:hover{background:var(--dsw-alias-button-floating-hover)}
 .dsh-git-button-primary{background:var(--dsw-alias-button-info-fill);border-color:var(--dsw-static-deepseek-500)}
 .dsh-git-button:disabled{opacity:.45;cursor:not-allowed}
+.dsh-git-composer-seat{display:contents}
 .dsh-git-composer-discard{display:inline-flex;flex:none;align-items:center;min-height:26px;padding:2px 10px;border:1px solid var(--dsw-alias-state-warn-primary,var(--dsw-alias-border-l3));border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-state-warn-label) 8%,transparent);color:var(--dsw-alias-state-warn-label);cursor:pointer;white-space:nowrap;font:var(--dsw-font-xs-13)}
 .dsh-git-composer-discard:hover{background:color-mix(in srgb,var(--dsw-alias-state-warn-label) 14%,transparent)}
 .dsh-git-composer-discard:disabled{opacity:.45;cursor:not-allowed}

@@ -17,6 +17,8 @@ export interface ContextTrayProps {
     readonly onMerge: () => Promise<void>;
     /** Consumed by the composer-row discard action, not by the tray itself. */
     readonly onDiscard: (send: boolean) => void;
+    /** One refused official send while the Context is unmerged. */
+    readonly onSendRefused: () => void;
 }
 /** Draggable ordered PA selection. The resident DSH composer remains below it. */
 export declare function ContextTray({ state, selectedIds, orderedIds, candidateId, busy, error, dirty, overLimit, onMove, onMoveEnd, onRemove, onMerge, }: ContextTrayProps): import("react").JSX.Element | null;

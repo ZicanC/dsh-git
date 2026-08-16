@@ -1,5 +1,5 @@
 import { useId, useState } from 'react'
-import { estimateTokens } from './graph.ts'
+import { estimateTokens, joinsLineages } from './graph.ts'
 import { nodeLabelMap } from './labels.ts'
 import { localized, useLocale } from './i18n.ts'
 import type { GraphState, TurnNodeId } from './types.ts'
@@ -22,6 +22,8 @@ export interface ContextTrayProps {
   readonly onMerge: () => Promise<void>
   /** Consumed by the composer-row discard action, not by the tray itself. */
   readonly onDiscard: (send: boolean) => void
+  /** One refused official send while the Context is unmerged. */
+  readonly onSendRefused: () => void
 }
 
 /** Draggable ordered PA selection. The resident DSH composer remains below it. */
@@ -36,6 +38,10 @@ export function ContextTray({
   const selectionState = { ...state, contextManifest: selectedIds }
   const labels = nodeLabelMap(state)
   const previewId = candidateId === null || selectedIds.includes(candidateId) ? null : candidateId
+  // A selection that stays inside one Session branches it; only PAs from a
+  // second Session make the new Chat a Merge. The preview counts, so the
+  // action names what it would become.
+  const action = joinsLineages(state, orderedIds) ? 'Merge' : 'Fork'
   const canMerge = !busy && !overLimit && selectedIds.length > 0 && candidateId === null
   const forcedExpanded = dirty || candidateId !== null || error !== null
   const expanded = forcedExpanded || expandedByUser
@@ -60,11 +66,13 @@ export function ContextTray({
           title={candidateId !== null
             ? localized('请先加入或关闭绿色候选 PA。', 'Add or close the green candidate PA first.', locale)
             : overLimit
-              ? localized('所选 PA 数量超过单次 Merge 上限。', 'The selection exceeds the per-Merge limit.', locale)
-              : undefined}
+              ? localized(`所选 PA 数量超过单次 ${action} 上限。`, `The selection exceeds the per-${action} limit.`, locale)
+              : action === 'Fork'
+                ? localized('当前选择只来自一个 Session：新 Chat 是这条对话的 Fork。', 'The selection comes from one Session: the new Chat forks this conversation.', locale)
+                : localized('当前选择来自多个 Session：新 Chat 会 Merge 这些 PA。', 'The selection spans Sessions: the new Chat merges those PAs.', locale)}
           onClick={() => { void onMerge().catch(() => {}) }}
         >
-          {busy ? localized('正在创建…', 'Creating…', locale) : 'Merge'}
+          {busy ? localized('正在创建…', 'Creating…', locale) : action}
         </button>
         <button
           className="dsh-git-tray-toggle"

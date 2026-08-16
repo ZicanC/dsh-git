@@ -36,6 +36,7 @@ function model(overrides: Partial<ContextTrayProps> = {}): ContextTrayProps {
     onRemove: () => {},
     onMerge: async () => {},
     onDiscard: () => {},
+    onSendRefused: () => {},
     ...overrides,
   }
 }

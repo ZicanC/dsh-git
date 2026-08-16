@@ -161,8 +161,11 @@ describe('graph UI', () => {
       onRemove={vi.fn()}
       onMerge={async () => {}}
       onDiscard={vi.fn()}
+      onSendRefused={vi.fn()}
     />)
     expect(within(tray.container).getByText(/2 PA · 约 \d+ tokens/)).toBeTruthy()
+    // Both PAs come from one Session, so the new Chat would fork it.
+    expect(within(tray.container).getByRole('button', { name: 'Fork' })).toBeTruthy()
     expect(within(tray.container).getByRole('button', { expanded: false })).toBeTruthy()
     expect(within(tray.container).queryByText('PA1')).toBeNull()
     fireEvent.click(within(tray.container).getByRole('button', { name: '展开 Context Tray' }))
@@ -189,6 +192,7 @@ describe('graph UI', () => {
       onRemove={vi.fn()}
       onMerge={async () => {}}
       onDiscard={vi.fn()}
+      onSendRefused={vi.fn()}
     />)
     expect(tray.container.innerHTML).toBe('')
   })
@@ -205,6 +209,7 @@ describe('graph UI', () => {
       onRemove: vi.fn(),
       onMerge: async () => {},
       onDiscard: vi.fn(),
+      onSendRefused: vi.fn(),
     }
     const tray = render(<ContextTray
       {...common}
@@ -221,6 +226,8 @@ describe('graph UI', () => {
     expect(candidateChip?.textContent).toContain('PA3')
     expect(candidateChip?.className).toContain('dsh-git-chip-candidate')
     expect(within(tray.container).getByRole('button', { name: '关闭 PA3 预览' })).toBeTruthy()
+    // PA3 comes from another Session: the preview already renames the action.
+    expect(within(tray.container).getByRole('button', { name: 'Merge' })).toBeTruthy()
     // The preview reorders like any other chip.
     fireEvent.click(within(tray.container).getByRole('button', { name: '将 PA3 向前移动' }))
     expect(common.onMove).toHaveBeenCalledWith(three.id, two.id)
@@ -232,6 +239,7 @@ describe('graph UI', () => {
       error={null}
       dirty={true}
     />)
+    expect(within(tray.container).getByRole('button', { name: 'Fork' })).toBeTruthy()
     expect((within(tray.container).getByRole('button', { expanded: true }) as HTMLButtonElement).disabled).toBe(true)
     expect(within(tray.container).queryByText(/Context 有未 Merge 的更改/)).toBeNull()
     expect(within(tray.container).queryByRole('button', { name: /放弃更改/ })).toBeNull()
@@ -284,7 +292,8 @@ describe('graph UI', () => {
       expect(screen.getByLabelText('PA3 · 虚线预览').getAttribute('data-preview-state')).toBe('candidate')
       expect(screen.getByText('虚线预览')).toBeTruthy()
     })
-    expect(fixture.setComposerBlocked).toHaveBeenCalledWith(true)
+    // A merely unmerged Context leaves the official composer typable.
+    expect(fixture.setComposerBlocked).not.toHaveBeenCalledWith(true)
 
     fireEvent.click(screen.getByRole('button', { name: '关闭 PA Context Window' }))
     expect(document.activeElement).toBe(pa3)
@@ -345,13 +354,14 @@ describe('graph UI', () => {
     expect(fixture.submit).not.toHaveBeenCalled()
   })
 
-  it('dirty selection blocks the composer and discard-and-send targets the source Session', async () => {
+  it('keeps a dirty composer typable and discard-and-send targets the source Session', async () => {
     const fixture = graphViewFixture(state, { draft: 'send from source' })
     renderGraphView(fixture)
     await vi.waitFor(() => expect(screen.getByRole('button', { name: '查看 PA3 context' })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: '查看 PA3 context' }))
 
-    await vi.waitFor(() => expect(fixture.setComposerBlocked).toHaveBeenCalledWith(true))
+    await vi.waitFor(() => expect(screen.getByRole('button', { name: '放弃更改并发送' })).toBeTruthy())
+    expect(fixture.setComposerBlocked).not.toHaveBeenCalledWith(true)
     fireEvent.click(screen.getByRole('button', { name: '放弃更改并发送' }))
 
     await vi.waitFor(() => expect(fixture.submit).toHaveBeenCalledTimes(1))
@@ -372,7 +382,7 @@ describe('graph UI', () => {
     expect(screen.getByRole('alert').textContent).toContain('来源 Session 仍被其他系统条件阻塞')
   })
 
-  it('blocks a clean source composer while Merge is busy and aborts navigation on unmount', async () => {
+  it('blocks a clean source composer while creation is busy and aborts navigation on unmount', async () => {
     const fixture = graphViewFixture(state, { draft: 'preserve me' })
     let signal: AbortSignal | undefined
     fixture.createMergedSession.mockImplementation(async (_manifest, _draft, nextSignal) => {
@@ -384,7 +394,8 @@ describe('graph UI', () => {
     const view = renderGraphView(fixture)
     await vi.waitFor(() => expect(screen.getByRole('button', { name: '查看 PA1 context' }).getAttribute('data-selection-state')).toBe('selected'))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Merge' }))
+    // Single-Session selection: the action is a Fork, and its flight blocks the same way.
+    fireEvent.click(screen.getByRole('button', { name: 'Fork' }))
     await vi.waitFor(() => expect(fixture.setComposerBlocked).toHaveBeenCalledWith(true))
     expect(signal?.aborted).toBe(false)
 
