@@ -40,7 +40,7 @@ function previewFor(sources: readonly HistoryTurnSource[]): HistoryPreviewRespon
           seq: index * 2 + 1,
           messageId: `user-${index}`,
           content: [{ type: 'text', text: `Preview prompt ${source.sourceTurn}` }],
-          source: null,
+          source: { kind: 'user' },
         },
         {
           kind: 'assistant',
@@ -277,13 +277,11 @@ describe('graph UI', () => {
     expect(screen.getByLabelText('PA Context Window')).toBeTruthy()
     expect(screen.getByText('PA-ca11d')).toBeTruthy()
     expect(screen.getByText('2 已加入 + 1 预览')).toBeTruthy()
-    // The preview note sits in the Chat History gutter, and the tray shows the dashed chip.
-    const chatPanel = view.container.querySelector('.dsh-git-chat-panel')
-    expect(within(chatPanel as HTMLElement).getByText(/绿色 PA 只是虚线预览/)).toBeTruthy()
+    // The compact PA rail carries the candidate state, and the tray shows the dashed chip.
     expect(within(screen.getByLabelText('Context Tray')).getByText('PA3')).toBeTruthy()
     expect(screen.getByLabelText('Context Tray').querySelector('[data-preview="candidate"]')).toBeTruthy()
     await vi.waitFor(() => {
-      expect(view.container.querySelector('[data-preview-state="candidate"]')).toBeTruthy()
+      expect(screen.getByLabelText('PA3 · 虚线预览').getAttribute('data-preview-state')).toBe('candidate')
       expect(screen.getByText('虚线预览')).toBeTruthy()
     })
     expect(fixture.setComposerBlocked).toHaveBeenCalledWith(true)
@@ -297,7 +295,6 @@ describe('graph UI', () => {
     fireEvent.click(screen.getByRole('button', { name: '加入 Context' }))
     expect(pa3.getAttribute('data-selection-state')).toBe('selected')
     expect(view.container.querySelector('[data-preview-state="candidate"]')).toBeNull()
-    expect(screen.queryByText(/绿色 PA 只是虚线预览/)).toBeNull()
     expect(screen.getByLabelText('Context Tray').querySelector('[data-preview="candidate"]')).toBeNull()
     expect(screen.getByText('3 已加入')).toBeTruthy()
     expect(screen.getByRole('button', { name: '移出 Context' })).toBeTruthy()

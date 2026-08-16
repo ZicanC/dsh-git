@@ -159,10 +159,15 @@ export function GraphView({
     ? selectedIds
     : [...selectedIds.slice(0, previewIndex), previewId, ...selectedIds.slice(previewIndex)],
   [selectedIds, previewId, previewIndex])
-  const previewKey = orderedPreviewIds.map(nodeId => {
+  // Keep the node label currency paired with the exact sources sent to the
+  // Host. If a stale graph reference cannot resolve, filtering the pair
+  // together prevents every later PA label from shifting by one.
+  const previewEntries = useMemo(() => orderedPreviewIds.flatMap(nodeId => {
     const source = sourceOf(state, nodeId)
-    return source === null ? `missing:${nodeId}` : `${source.sourceSessionId}:${source.sourceTurn}:${source.sourceBoundarySeq}`
-  }).join('|')
+    return source === null ? [] : [{ nodeId, source }]
+  }), [orderedPreviewIds, state])
+  const previewKey = previewEntries.map(({ source }) =>
+    `${source.sourceSessionId}:${source.sourceTurn}:${source.sourceBoundarySeq}`).join('|')
 
   const composerBlocked = dirty || busy
   useEffect(() => {
@@ -171,10 +176,7 @@ export function GraphView({
   }, [composerBlocked, setComposerBlocked, locale])
 
   useEffect(() => {
-    const sources = orderedPreviewIds.flatMap(nodeId => {
-      const source = sourceOf(state, nodeId)
-      return source === null ? [] : [source]
-    })
+    const sources = previewEntries.map(entry => entry.source)
     if (sources.length === 0) {
       setPreview(null)
       setPreviewLoading(false)
@@ -405,18 +407,13 @@ export function GraphView({
         </header>
         <ChatHistoryPreview
           response={preview}
-          orderedNodeIds={orderedPreviewIds}
+          orderedNodeIds={previewEntries.map(entry => entry.nodeId)}
           labels={labels}
           candidateNodeId={candidateId}
           loading={previewLoading}
           error={previewError}
           loadImage={loadPreviewImage}
         />
-        {/* The preview note rides the history's right gutter, beside the dashed
-            turn it explains, instead of taking a line inside the Context Tray. */}
-        {candidateId === null ? null : <aside className="dsh-git-candidate-note" role="status">
-          {localized('绿色 PA 只是虚线预览；请在 PA Context Window 中选择“加入 Context”，或关闭预览。', 'The green PA is only a dashed preview; add it from the PA Context Window or close the preview.', locale)}
-        </aside>}
       </section>
     </div>
   </div>
