@@ -194,6 +194,31 @@ describe('HistoryRail presentation', () => {
     expect(active).toHaveBeenLastCalledWith(null)
   })
 
+  it('renders the complete trajectory treatment when Chat History owns the full workbench', () => {
+    const select = vi.fn()
+    const view = render(<HistoryRail {...model} expanded onSelect={select} />)
+    const rail = view.container.querySelector('.dsh-git-rail-expanded')
+    const rows = [...view.container.querySelectorAll('.dsh-git-rail-expanded-row')]
+
+    expect(rail?.textContent).toContain('会话轨迹')
+    expect(rail?.textContent).toContain('1 已加入 · 1 预览')
+    expect(rows.map(row => row.getAttribute('data-node-id'))).toEqual([one.id, three.id])
+    expect(rows.map(row => row.getAttribute('data-rail-state'))).toEqual(['included', 'preview'])
+    expect(rows[0]?.getAttribute('data-head')).toBe('')
+    expect(rows[1]?.getAttribute('data-branched')).toBe('')
+    expect(view.container.querySelectorAll('.dsh-git-rail-dash')).toHaveLength(0)
+    expect(view.container.querySelectorAll('.dsh-git-rail-expanded-preview')).toHaveLength(1)
+
+    fireEvent.pointerEnter(rows[1] as HTMLElement)
+    const summary = screen.getByRole('tooltip')
+    expect(summary.textContent).toContain('PA3')
+    expect(summary.textContent).toContain('medium answer')
+    expect(summary.getAttribute('data-rail-state')).toBe('preview')
+
+    fireEvent.click(screen.getByRole('button', { name: 'PA3 · branch question' }))
+    expect(select).toHaveBeenCalledWith(three.id)
+  })
+
   it('costs no layout when the trail is empty, and stays inert while busy', () => {
     const empty = render(<HistoryRail {...EMPTY_HISTORY_RAIL} onSelect={vi.fn()} />)
     expect(empty.container.firstChild).toBeNull()

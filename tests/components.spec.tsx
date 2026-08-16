@@ -155,12 +155,28 @@ describe('graph UI', () => {
 
     expect(screen.queryByLabelText('Conversation Graph')).toBeNull()
     expect(view.container.querySelector('.dsh-git-workbench-graph-closed')).toBeTruthy()
+    expect(view.container.querySelector('.dsh-git-chat-body-rail-expanded')).toBeTruthy()
+    expect(view.container.querySelector('.dsh-git-rail-expanded')).toBeTruthy()
+    expect(view.container.querySelectorAll('.dsh-git-rail-expanded-row')).toHaveLength(2)
+    const historyTarget = document.createElement('section')
+    historyTarget.id = `dsh-git-history-${two.id}`
+    historyTarget.tabIndex = -1
+    document.body.append(historyTarget)
+    const scrollIntoView = vi.fn()
+    historyTarget.scrollIntoView = scrollIntoView
+    fireEvent.click(within(view.container.querySelector('.dsh-git-rail-expanded') as HTMLElement)
+      .getByRole('button', { name: 'PA2 · Question two' }))
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start', inline: 'nearest' })
+    expect(document.activeElement).toBe(historyTarget)
+    historyTarget.remove()
     const open = within(chatHeading as HTMLElement)
       .getByRole('button', { name: '打开 Conversation Graph', expanded: false })
     fireEvent.click(open)
 
     expect(screen.getByLabelText('Conversation Graph')).toBeTruthy()
     expect(view.container.querySelector('.dsh-git-workbench-graph-closed')).toBeNull()
+    expect(view.container.querySelector('.dsh-git-rail-expanded')).toBeNull()
+    expect(view.container.querySelectorAll('.dsh-git-rail-dash')).toHaveLength(2)
   })
 
   it('keeps Context Tray compact until expanded, then exposes PA ordering controls', () => {

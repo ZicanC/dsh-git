@@ -11,6 +11,9 @@ export interface HistoryRailEntry {
   readonly label: string
   /** Single-line prompt shown on the row. */
   readonly prompt: string
+  /** Short answer heading and excerpt used only by the expanded hover card. */
+  readonly summaryTitle: string
+  readonly summary: string
   readonly state: HistoryRailState
   readonly head: boolean
   /** Branch depth, capped so a deep DAG never pushes the prompt out of view. */
@@ -54,6 +57,11 @@ function oneLine(value: string, maximum: number): string {
   return collapsed.length <= maximum ? collapsed : `${collapsed.slice(0, maximum - 1)}…`
 }
 
+function answerTitle(value: string): string {
+  const first = value.split(/\r?\n/).map(line => line.trim()).find(line => line !== '') ?? ''
+  return oneLine(first.replace(/^#{1,6}\s+/, ''), 42)
+}
+
 /**
  * Build the rail from exactly the committed Context plus its one candidate.
  * The ordering follows Chat History, while every unselected graph node stays
@@ -71,7 +79,8 @@ export function historyRailModel(state: GraphState, input: HistoryRailInput): Hi
   const visible = new Set<TurnNodeId>(input.selectedIds)
   if (candidate !== null) visible.add(candidate)
 
-  const trajectoryNodes = orderedNodes(state).filter(node => visible.has(node.id))
+  const graphNodes = orderedNodes(state)
+  const trajectoryNodes = graphNodes.filter(node => visible.has(node.id))
   if (trajectoryNodes.length === 0) return EMPTY_HISTORY_RAIL
 
   const byId = new Map(trajectoryNodes.map(node => [node.id, node]))
@@ -98,7 +107,7 @@ export function historyRailModel(state: GraphState, input: HistoryRailInput): Hi
 
   // Compute lanes in graph order so a user reordering Context does not invent
   // or erase topology. Independent roots always restart on the spine.
-  for (const node of trajectoryNodes) {
+  for (const node of graphNodes) {
     const parentId = node.primaryParentId
     const parentLane = parentId === null ? undefined : lanes.get(parentId)
     if (parentId === null || parentLane === undefined) {
@@ -124,6 +133,8 @@ export function historyRailModel(state: GraphState, input: HistoryRailInput): Hi
       nodeId: node.id,
       label: labels.get(node.id) ?? 'PA',
       prompt: oneLine(node.prompt, 120),
+      summaryTitle: answerTitle(node.answer),
+      summary: oneLine(node.answer, 180),
       state: included.has(node.id) ? 'included' : 'preview',
       head: node.id === input.headNodeId,
       indent: Math.min(lanes.get(node.id) ?? 0, MAX_INDENT),

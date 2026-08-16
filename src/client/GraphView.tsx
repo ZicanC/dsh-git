@@ -241,6 +241,13 @@ export function GraphView({
     }
   }
 
+  const jumpToHistory = (nodeId: TurnNodeId): void => {
+    const target = document.getElementById(`dsh-git-history-${nodeId}`)
+    if (target === null) return
+    target.scrollIntoView({ block: 'start', inline: 'nearest' })
+    target.focus({ preventScroll: true })
+  }
+
   const addCandidate = (): void => {
     if (busy) return
     if (candidateId === null || state.nodes[candidateId] === undefined) return
@@ -454,11 +461,14 @@ export function GraphView({
             {candidateId === null ? '' : localized(' + 1 预览', ' + 1 preview', locale)}
           </span>
         </header>
-        <div className={`dsh-git-chat-body ${rail.entries.length === 0 ? '' : 'dsh-git-chat-body-rail'}`}>
+        <div className={`dsh-git-chat-body ${rail.entries.length === 0
+          ? ''
+          : graphOpen ? 'dsh-git-chat-body-rail' : 'dsh-git-chat-body-rail-expanded'}`}>
           <HistoryRail
             {...rail}
             disabled={busy}
-            onSelect={inspect}
+            expanded={!graphOpen}
+            onSelect={jumpToHistory}
             onActiveChange={setActiveTrailId}
           />
           <ChatHistoryPreview

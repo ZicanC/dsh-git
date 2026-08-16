@@ -7,6 +7,9 @@ export interface HistoryRailEntry {
     readonly label: string;
     /** Single-line prompt shown on the row. */
     readonly prompt: string;
+    /** Short answer heading and excerpt used only by the expanded hover card. */
+    readonly summaryTitle: string;
+    readonly summary: string;
     readonly state: HistoryRailState;
     readonly head: boolean;
     /** Branch depth, capped so a deep DAG never pushes the prompt out of view. */
