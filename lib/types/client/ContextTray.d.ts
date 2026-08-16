@@ -3,6 +3,8 @@ import type { GraphState, TurnNodeId } from './types.ts';
 export interface ContextTrayProps {
     readonly state: GraphState;
     readonly selectedIds: readonly TurnNodeId[];
+    /** Merge order as previewed: the selection with the candidate at its place. */
+    readonly orderedIds: readonly TurnNodeId[];
     readonly candidateId: TurnNodeId | null;
     readonly busy: boolean;
     readonly error: string | null;
@@ -17,4 +19,4 @@ export interface ContextTrayProps {
     readonly onDiscard: (send: boolean) => void;
 }
 /** Draggable ordered PA selection. The resident DSH composer remains below it. */
-export declare function ContextTray({ state, selectedIds, candidateId, busy, error, dirty, overLimit, onMove, onMoveEnd, onRemove, onMerge, }: ContextTrayProps): import("react").JSX.Element | null;
+export declare function ContextTray({ state, selectedIds, orderedIds, candidateId, busy, error, dirty, overLimit, onMove, onMoveEnd, onRemove, onMerge, }: ContextTrayProps): import("react").JSX.Element | null;

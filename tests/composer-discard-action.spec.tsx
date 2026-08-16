@@ -24,6 +24,7 @@ function model(overrides: Partial<ContextTrayProps> = {}): ContextTrayProps {
   return {
     state: graph([]),
     selectedIds: [],
+    orderedIds: [],
     candidateId: null,
     busy: false,
     error: null,

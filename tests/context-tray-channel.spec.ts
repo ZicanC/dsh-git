@@ -9,6 +9,7 @@ function model(label: string): ContextTrayProps {
   return {
     state: graph([]),
     selectedIds: [],
+    orderedIds: [],
     candidateId: null,
     busy: false,
     error: label,

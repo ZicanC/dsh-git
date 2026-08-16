@@ -149,6 +149,7 @@ describe('graph UI', () => {
     const tray = render(<ContextTray
       state={state}
       selectedIds={[one.id, two.id]}
+      orderedIds={[one.id, two.id]}
       candidateId={null}
       busy={false}
       error={null}
@@ -176,6 +177,7 @@ describe('graph UI', () => {
     const tray = render(<ContextTray
       state={state}
       selectedIds={[]}
+      orderedIds={[]}
       candidateId={null}
       busy={false}
       error={null}
@@ -206,6 +208,7 @@ describe('graph UI', () => {
     }
     const tray = render(<ContextTray
       {...common}
+      orderedIds={[one.id, two.id, three.id]}
       candidateId={three.id}
       error={null}
       dirty={false}
@@ -218,10 +221,13 @@ describe('graph UI', () => {
     expect(candidateChip?.textContent).toContain('PA3')
     expect(candidateChip?.className).toContain('dsh-git-chip-candidate')
     expect(within(tray.container).getByRole('button', { name: '关闭 PA3 预览' })).toBeTruthy()
-    expect(within(tray.container).queryByRole('button', { name: '将 PA3 向前移动' })).toBeNull()
+    // The preview reorders like any other chip.
+    fireEvent.click(within(tray.container).getByRole('button', { name: '将 PA3 向前移动' }))
+    expect(common.onMove).toHaveBeenCalledWith(three.id, two.id)
 
     tray.rerender(<ContextTray
       {...common}
+      orderedIds={[one.id, two.id]}
       candidateId={null}
       error={null}
       dirty={true}
@@ -232,6 +238,7 @@ describe('graph UI', () => {
 
     tray.rerender(<ContextTray
       {...common}
+      orderedIds={[one.id, two.id]}
       candidateId={null}
       error="preview failed"
       dirty={false}
@@ -294,6 +301,35 @@ describe('graph UI', () => {
     expect(screen.getByLabelText('Context Tray').querySelector('[data-preview="candidate"]')).toBeNull()
     expect(screen.getByText('3 已加入')).toBeTruthy()
     expect(screen.getByRole('button', { name: '移出 Context' })).toBeTruthy()
+  })
+
+  it('reorders the dashed preview before it is added, and commits it in that place', async () => {
+    const fixture = graphViewFixture(state)
+    const view = renderGraphView(fixture)
+    await vi.waitFor(() => expect(screen.getByRole('button', { name: '查看 PA1 context' }).getAttribute('data-selection-state')).toBe('selected'))
+
+    fireEvent.click(screen.getByRole('button', { name: '查看 PA3 context' }))
+    const chipLabels = () => [...screen.getByLabelText('Context Tray').querySelectorAll('.dsh-git-chip')]
+      .map(chip => chip.textContent?.replace(/[⠿⌁‹›×]|预览/g, '') ?? '')
+    expect(chipLabels()).toEqual(['PA1', 'PA2', 'PA3'])
+
+    fireEvent.click(screen.getByRole('button', { name: '将 PA3 向前移动' }))
+    expect(chipLabels()).toEqual(['PA1', 'PA3', 'PA2'])
+    expect(screen.getByLabelText('Context Tray').querySelector('[data-preview="candidate"]')?.textContent).toContain('PA3')
+    // The moved preview stays a preview: still dashed in the history, still uncounted.
+    expect(screen.getByText('2 已加入 + 1 预览')).toBeTruthy()
+    await vi.waitFor(() => expect(view.container.querySelector('[data-preview-state="candidate"]')).toBeTruthy())
+
+    fireEvent.click(screen.getByRole('button', { name: '加入 Context' }))
+    expect(chipLabels()).toEqual(['PA1', 'PA3', 'PA2'])
+    expect(screen.getByLabelText('Context Tray').querySelector('[data-preview="candidate"]')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Merge' }))
+    await vi.waitFor(() => expect(fixture.createMergedSession).toHaveBeenCalledWith(
+      [one.id, three.id, two.id],
+      expect.anything(),
+      expect.any(AbortSignal),
+    ))
   })
 
   it('Merge creates a new Chat with the ordered selection and never submits', async () => {

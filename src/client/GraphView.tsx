@@ -98,6 +98,9 @@ export function GraphView({
   const [baselineIds, setBaselineIds] = useState<TurnNodeId[]>([])
   const [selectionTouched, setSelectionTouched] = useState(false)
   const [candidateId, setCandidateId] = useState<TurnNodeId | null>(null)
+  // Where the dashed candidate sits in the previewed merge order; the user can
+  // move it before deciding to add it, so it is not always the last entry.
+  const [candidateIndex, setCandidateIndex] = useState(0)
   const [inspectedId, setInspectedId] = useState<TurnNodeId | null>(null)
   const [preview, setPreview] = useState<HistoryPreviewResponse | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -150,9 +153,12 @@ export function GraphView({
 
   const labels = useMemo(() => nodeLabelMap(state), [state])
   const dirty = candidateId !== null || !sameIds(selectedIds, baselineIds)
-  const orderedPreviewIds = useMemo(() => candidateId === null || selectedIds.includes(candidateId)
+  const previewId = candidateId !== null && !selectedIds.includes(candidateId) ? candidateId : null
+  const previewIndex = Math.min(Math.max(candidateIndex, 0), selectedIds.length)
+  const orderedPreviewIds = useMemo(() => previewId === null
     ? selectedIds
-    : [...selectedIds, candidateId], [selectedIds, candidateId])
+    : [...selectedIds.slice(0, previewIndex), previewId, ...selectedIds.slice(previewIndex)],
+  [selectedIds, previewId, previewIndex])
   const previewKey = orderedPreviewIds.map(nodeId => {
     const source = sourceOf(state, nodeId)
     return source === null ? `missing:${nodeId}` : `${source.sourceSessionId}:${source.sourceTurn}:${source.sourceBoundarySeq}`
@@ -209,6 +215,7 @@ export function GraphView({
       return
     }
     setCandidateId(nodeId)
+    setCandidateIndex(selectedIds.length)
     setSelectionTouched(true)
   }
 
@@ -226,7 +233,10 @@ export function GraphView({
   const addCandidate = (): void => {
     if (busy) return
     if (candidateId === null || state.nodes[candidateId] === undefined) return
-    setSelectedIds(ids => ids.includes(candidateId) ? ids : [...ids, candidateId])
+    // Commit the preview where the user parked it, not at the end.
+    setSelectedIds(ids => ids.includes(candidateId)
+      ? ids
+      : [...ids.slice(0, previewIndex), candidateId, ...ids.slice(previewIndex)])
     setCandidateId(null)
     setSelectionTouched(true)
   }
@@ -239,23 +249,28 @@ export function GraphView({
     setSelectionTouched(true)
   }
 
+  // Reordering runs over the previewed order, then splits back into the
+  // committed selection and the candidate's place inside it.
+  const commitOrder = (next: readonly TurnNodeId[]): void => {
+    if (previewId !== null) setCandidateIndex(next.indexOf(previewId))
+    setSelectedIds(next.filter(id => id !== previewId))
+    setSelectionTouched(true)
+  }
+
   const move = (nodeId: TurnNodeId, beforeId: TurnNodeId): void => {
     if (busy) return
-    setSelectedIds(ids => {
-      if (nodeId === beforeId || !ids.includes(nodeId)) return ids
-      const next = ids.filter(id => id !== nodeId)
-      const index = next.indexOf(beforeId)
-      if (index < 0) return ids
-      next.splice(index, 0, nodeId)
-      return next
-    })
-    setSelectionTouched(true)
+    if (nodeId === beforeId || !orderedPreviewIds.includes(nodeId)) return
+    const next = orderedPreviewIds.filter(id => id !== nodeId)
+    const index = next.indexOf(beforeId)
+    if (index < 0) return
+    next.splice(index, 0, nodeId)
+    commitOrder(next)
   }
 
   const moveEnd = (nodeId: TurnNodeId): void => {
     if (busy) return
-    setSelectedIds(ids => ids.includes(nodeId) ? [...ids.filter(id => id !== nodeId), nodeId] : ids)
-    setSelectionTouched(true)
+    if (!orderedPreviewIds.includes(nodeId)) return
+    commitOrder([...orderedPreviewIds.filter(id => id !== nodeId), nodeId])
   }
 
   const discard = (send: boolean): void => {
@@ -327,6 +342,7 @@ export function GraphView({
   const trayModel: ContextTrayProps = {
     state,
     selectedIds,
+    orderedIds: orderedPreviewIds,
     candidateId,
     busy,
     error: actionError,

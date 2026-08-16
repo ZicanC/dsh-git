@@ -24,6 +24,7 @@ function model(overrides: Partial<ContextTrayProps> = {}): ContextTrayProps {
   return {
     state: graph([]),
     selectedIds: [],
+    orderedIds: [],
     candidateId: null,
     busy: false,
     error: null,
@@ -60,6 +61,7 @@ describe('ContextTrayDock', () => {
       channel.publish(owner, model({
         state: graph([pa]),
         selectedIds: [pa.id],
+        orderedIds: [pa.id],
       }))
     })
     expect(screen.getByLabelText('Context Tray')).toBeTruthy()
