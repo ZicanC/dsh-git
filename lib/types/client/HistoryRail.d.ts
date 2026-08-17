@@ -15,4 +15,7 @@ export interface HistoryRailProps extends HistoryRailModel {
  * mode a dash stretches into its PA/title row. When Chat History owns the full
  * workbench, the same entries become rows whose hover card summarizes the PA.
  */
-export declare function HistoryRail({ entries, includedCount, previewCount, disabled, expanded, onSelect, onActiveChange, }: HistoryRailProps): import("react").JSX.Element | null;
+declare function HistoryRailView({ entries, includedCount, previewCount, disabled, expanded, onSelect, onActiveChange, }: HistoryRailProps): import("react").JSX.Element | null;
+/** Memoized: the trail only changes with the selection, never with a delta. */
+export declare const HistoryRail: import("react").MemoExoticComponent<typeof HistoryRailView>;
+export {};

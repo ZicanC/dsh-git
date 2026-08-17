@@ -269,4 +269,92 @@ describe('ChatHistoryPreview official-style projection', () => {
     expect(event.getAttribute('aria-expanded')).toBe('true')
     expect(view.container.textContent).toContain('future payload')
   })
+
+  it('keeps settled PAs on screen while an unread PA fills in, then streams a live tail', () => {
+    const response: HistoryPreviewResponse = {
+      turns: [
+        {
+          source: { sourceSessionId: 'source-session-1', sourceTurn: 1, sourceBoundarySeq: 10 },
+          targetTurn: 1,
+          records: [{
+            kind: 'user',
+            seq: 1,
+            messageId: 'settled',
+            content: [{ type: 'text', text: 'settled prompt' }],
+            source: { kind: 'user' },
+          }],
+        },
+        {
+          source: { sourceSessionId: 'source-session-2', sourceTurn: 2, sourceBoundarySeq: 20 },
+          targetTurn: 2,
+          records: [],
+        },
+      ],
+    }
+    const view = render(<ChatHistoryPreview
+      response={response}
+      orderedNodeIds={[firstId, secondId]}
+      labels={new Map([[firstId, 'PA1'], [secondId, 'PA2']])}
+      candidateNodeId={null}
+      activeNodeId={null}
+      pendingNodeIds={new Set([secondId])}
+      liveTurns={[{
+        key: 'live-turn:3',
+        label: 'Turn 3',
+        sourceSessionId: 'source-session-1',
+        records: [{
+          kind: 'assistant',
+          seq: 9,
+          step: 1,
+          messageId: 'live',
+          blocks: [{ type: 'text', text: 'streaming words' }],
+          provenance: { provider: '', model: '' },
+        }],
+      }]}
+      loading
+      error={null}
+      loadImage={unavailableImage}
+    />)
+
+    // The settled PA renders, the unread one announces itself, and neither is
+    // replaced by a full-panel loading state.
+    expect(screen.getByText('settled prompt')).toBeTruthy()
+    const pending = view.container.querySelector(`[data-node-id="${secondId}"]`) as HTMLElement
+    expect(pending.getAttribute('aria-busy')).toBe('true')
+    expect(within(pending).getByRole('status').textContent).toContain('Loading this PA')
+
+    const live = view.container.querySelector('[data-preview-state="live"]') as HTMLElement
+    expect(within(live).getByText('streaming words')).toBeTruthy()
+    expect(live.getAttribute('aria-label')).toBe('Turn 3 · streaming')
+    expect(live.getAttribute('data-node-id')).toBeNull()
+  })
+
+  it('renders a live tail with no selected PA instead of the empty-selection hint', () => {
+    render(<ChatHistoryPreview
+      response={null}
+      orderedNodeIds={[]}
+      labels={new Map()}
+      candidateNodeId={null}
+      activeNodeId={null}
+      liveTurns={[{
+        key: 'live-turn:1',
+        label: 'Turn 1',
+        sourceSessionId: 'source-session-1',
+        records: [{
+          kind: 'user',
+          seq: 1,
+          messageId: 'live-user',
+          content: [{ type: 'text', text: 'first question' }],
+          source: { kind: 'user' },
+        }],
+      }]}
+      loading={false}
+      error={null}
+      loadImage={unavailableImage}
+    />)
+
+    expect(screen.queryByText(/Select PAs to preview/)).toBeNull()
+    expect(screen.getByText('first question')).toBeTruthy()
+    expect(screen.getByLabelText('Turn 1 · streaming')).toBeTruthy()
+  })
 })

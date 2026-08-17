@@ -138,6 +138,8 @@ pnpm pack
 - `components.spec.tsx`：`HEAD`、预览与选择三种状态的相互独立，以及分支创建失败时输入框的行为。
 - `project-history.spec.ts`：已完成回合提取、fork 种子元数据和 RPC 载荷校验。
 - `project-graph.spec.ts`：fork 去重、精确保留 merge 关系和时间轴前缀。
+- `preview-cache.spec.ts`：每个 PA 只读取一次、在本地按所选顺序组装，以及缓存淘汰。
+- `live-turn.spec.ts`：由进行中回合投影出的 Chat History 实时片段（流式回答、运行中的工具调用，且只投影未结束的回合）。
 - `project-page.spec.tsx` / `project-bridge.spec.tsx`：时间轴回放、详情检查、重试、来源导航、DOM 重新注入和清理。
 
 如需在不修改用户真实 DSH 配置的情况下进行冒烟测试：

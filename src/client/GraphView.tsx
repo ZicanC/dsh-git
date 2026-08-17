@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { DraftAttachmentId } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { IconPanelLeftOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -7,7 +7,9 @@ import type {
   HistoryPreviewImageAttachment, HistoryPreviewResponse, HistoryTurnSource, ProjectGraphResponse,
 } from '../protocol.ts'
 import { MAX_MERGED_HISTORY_TURNS } from '../protocol.ts'
-import { ChatHistoryPreview, type LoadedPreviewImage } from './ChatHistoryPreview.tsx'
+import {
+  ChatHistoryPreview, type LivePreviewTurn, type LoadedPreviewImage,
+} from './ChatHistoryPreview.tsx'
 import type { ContextTrayProps } from './ContextTray.tsx'
 import type { ContextTrayChannel } from './context-tray-channel.ts'
 import { GraphCanvas } from './GraphCanvas.tsx'
@@ -16,6 +18,8 @@ import { historyRailModel } from './history-rail.ts'
 import { PAContextWindow } from './PAContextWindow.tsx'
 import type { GraphRepository } from './repository.ts'
 import { extractCompletedTurns } from './extract.ts'
+import { projectLiveTurns } from './live-turn.ts'
+import { HistoryPreviewCache, previewSourceKey } from './preview-cache.ts'
 import { nodeLabelMap } from './labels.ts'
 import { assembleProjectGraph } from './project-graph.ts'
 import { localized, useLocale } from './i18n.ts'
@@ -89,10 +93,17 @@ export function GraphView({
   tray, setComposerBlocked, createMergedSession,
 }: ConvViewProps & InjectFace<GraphViewInjected>) {
   const locale = useLocale()
-  const snapshot = useSession(value => value)
+  // Narrow subscriptions: an assistant delta swaps only `partial`, so the
+  // graph, the rail, and every settled Chat History section keep their
+  // memoized render while the live tail streams.
+  const nodes = useSession(value => value.nodes)
+  const timeline = useSession(value => value.chat.timeline)
+  const partial = useSession(value => value.partial)
+  const runningCalls = useSession(value => value.runningCalls)
   const input = useInput(value => value)
   const localState = useGraph((value: GraphState) => value)
-  const turns = useMemo(() => extractCompletedTurns(snapshot), [snapshot])
+  const turns = useMemo(
+    () => extractCompletedTurns({ nodes, chat: { timeline } }), [nodes, timeline])
   const turnSignature = turns.map(turn => `${turn.turn}:${turn.boundarySeq}:${turn.answer.length}`).join('|')
 
   const [project, setProject] = useState<ProjectGraphLoad | null>(null)
@@ -107,15 +118,21 @@ export function GraphView({
   const [inspectedId, setInspectedId] = useState<TurnNodeId | null>(null)
   const [graphOpen, setGraphOpen] = useState(true)
   const [activeTrailId, setActiveTrailId] = useState<TurnNodeId | null>(null)
-  const [preview, setPreview] = useState<HistoryPreviewResponse | null>(null)
+  const [previewRevision, setPreviewRevision] = useState(0)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const mergeAbortRef = useRef<AbortController | null>(null)
   const trayOwnerRef = useRef<object>({})
+  // A completed turn is immutable, so its records are cached for the lifetime
+  // of this view and never re-read when the selection changes.
+  const previewCacheRef = useRef(new HistoryPreviewCache())
+  const previewInFlightRef = useRef(new Set<string>())
+  const previewAbortRef = useRef<AbortController | null>(null)
 
   useEffect(() => () => { mergeAbortRef.current?.abort() }, [])
+  useEffect(() => () => { previewAbortRef.current?.abort() }, [])
 
   useEffect(() => { syncTurns(turns) }, [turnSignature, syncTurns])
 
@@ -184,38 +201,78 @@ export function GraphView({
     return () => { setComposerBlocked(false) }
   }, [busy, setComposerBlocked, locale])
 
+  const overLimit = previewEntries.length > MAX_MERGED_HISTORY_TURNS
+
+  // Only PAs this view has never read are requested, and a request in flight
+  // is never cancelled by a later selection edit: its records stay valid for
+  // whatever selection is current when they land. Removing a PA is therefore
+  // pure local work, and re-adding one costs no Host round trip at all.
   useEffect(() => {
     const sources = previewEntries.map(entry => entry.source)
-    if (sources.length === 0) {
-      setPreview(null)
+    if (sources.length === 0 || overLimit) {
       setPreviewLoading(false)
-      setPreviewError(null)
+      setPreviewError(overLimit
+        ? localized(
+          `单次 Merge 最多支持 ${MAX_MERGED_HISTORY_TURNS} 个 PA；请移除部分 PA。`,
+          `One Merge supports up to ${MAX_MERGED_HISTORY_TURNS} PAs. Remove some PAs to continue.`, locale,
+        )
+        : null)
       return
     }
-    if (sources.length > MAX_MERGED_HISTORY_TURNS) {
-      setPreview(null)
-      setPreviewLoading(false)
-      setPreviewError(localized(
-        `单次 Merge 最多支持 ${MAX_MERGED_HISTORY_TURNS} 个 PA；请移除部分 PA。`,
-        `One Merge supports up to ${MAX_MERGED_HISTORY_TURNS} PAs. Remove some PAs to continue.`, locale,
-      ))
+    const inFlight = previewInFlightRef.current
+    const missing = previewCacheRef.current.missing(sources)
+      .filter(source => !inFlight.has(previewSourceKey(source)))
+    if (missing.length === 0) {
+      setPreviewLoading(inFlight.size > 0)
+      if (inFlight.size === 0) setPreviewError(null)
       return
     }
-    const controller = new AbortController()
-    setPreview(null)
+    previewAbortRef.current ??= new AbortController()
+    const signal = previewAbortRef.current.signal
+    const keys = missing.map(previewSourceKey)
+    for (const key of keys) inFlight.add(key)
     setPreviewLoading(true)
     setPreviewError(null)
-    void loadHistoryPreview(sources, controller.signal).then((response) => {
-      if (controller.signal.aborted) return
-      setPreview(response)
-      setPreviewLoading(false)
+    void loadHistoryPreview(missing, signal).then((response) => {
+      if (signal.aborted) return
+      previewCacheRef.current.absorb(response)
+      setPreviewRevision(revision => revision + 1)
     }).catch((cause: unknown) => {
-      if (controller.signal.aborted) return
+      if (signal.aborted) return
       setPreviewError(cause instanceof Error ? cause.message : String(cause))
-      setPreviewLoading(false)
+    }).finally(() => {
+      for (const key of keys) inFlight.delete(key)
+      if (!signal.aborted) setPreviewLoading(inFlight.size > 0)
     })
-    return () => controller.abort()
-  }, [previewKey, loadHistoryPreview, locale])
+  }, [previewKey, overLimit, loadHistoryPreview, locale])
+
+  const preview = useMemo<HistoryPreviewResponse | null>(() => {
+    if (previewEntries.length === 0 || overLimit) return null
+    return previewCacheRef.current.assemble(previewEntries.map(entry => entry.source))
+    // previewRevision republishes the assembly after a Host read lands.
+  }, [previewEntries, overLimit, previewRevision])
+  const pendingNodeIds = useMemo(() => new Set(previewEntries.flatMap(entry =>
+    previewCacheRef.current.has(entry.source) ? [] : [entry.nodeId])),
+  [previewEntries, previewRevision])
+
+  // The graph only owns a turn once it closes, so everything after the last
+  // registered turn is still being produced: that is exactly what the live
+  // tail renders, straight from the official conversation snapshot.
+  const registeredTurn = useMemo(() => Object.entries(state.sessionTurnRefs[String(sessionId)] ?? {})
+    .reduce((highest, [turn, nodeId]) => state.nodes[nodeId] === undefined
+      ? highest
+      : Math.max(highest, Number(turn)), 0), [state, sessionId])
+  const liveTurns = useMemo<readonly LivePreviewTurn[]>(() => projectLiveTurns({
+    nodes,
+    chat: { timeline },
+    partial: partial ?? null,
+    runningCalls: runningCalls ?? [],
+  }, registeredTurn).map(turn => ({
+    key: turn.key,
+    label: localized(`第 ${turn.turn} 轮`, `Turn ${turn.turn}`, locale),
+    sourceSessionId: String(sessionId),
+    records: turn.records,
+  })), [nodes, timeline, partial, runningCalls, registeredTurn, sessionId, locale])
 
   const inspect = (nodeId: TurnNodeId): void => {
     if (busy) return
@@ -241,12 +298,14 @@ export function GraphView({
     }
   }
 
-  const jumpToHistory = (nodeId: TurnNodeId): void => {
+  // Stable identity: the rail is memoized, and a streaming delta must not
+  // re-render it through a fresh callback.
+  const jumpToHistory = useCallback((nodeId: TurnNodeId): void => {
     const target = document.getElementById(`dsh-git-history-${nodeId}`)
     if (target === null) return
     target.scrollIntoView({ block: 'start', inline: 'nearest' })
     target.focus({ preventScroll: true })
-  }
+  }, [])
 
   const addCandidate = (): void => {
     if (busy) return
@@ -351,11 +410,13 @@ export function GraphView({
 
   const inspected = inspectedId === null ? undefined : state.nodes[inspectedId]
   const inspectedSelected = inspectedId !== null && selectedIds.includes(inspectedId)
-  const canvasState: GraphState = {
+  // Memoized: the canvas re-lays out the whole tree whenever this object's
+  // identity changes, which must not happen on every streamed delta.
+  const canvasState = useMemo<GraphState>(() => ({
     ...state,
     headNodeId: baselineIds.at(-1) ?? state.headNodeId,
     contextManifest: [],
-  }
+  }), [state, baselineIds])
   const rail = useMemo(() => historyRailModel(state, {
     selectedIds,
     candidateId,
@@ -477,6 +538,8 @@ export function GraphView({
             labels={labels}
             candidateNodeId={candidateId}
             activeNodeId={activeTrailId}
+            pendingNodeIds={pendingNodeIds}
+            liveTurns={liveTurns}
             loading={previewLoading}
             error={previewError}
             loadImage={loadPreviewImage}

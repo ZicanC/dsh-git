@@ -136,9 +136,16 @@ export async function apply(ctx: Context): Promise<void> {
   ): Promise<{ ok: true; value: unknown }> => {
     const request = decodeHistoryPreviewRequest(payload)
     signal.throwIfAborted()
-    const value = await projectHistoryPreview(request.sources, async sessionId => {
+    // Several selected turns usually share one source Session; reading its log
+    // once per request keeps a multi-PA preview at one read per Session.
+    const snapshots = new Map<string, Promise<Awaited<ReturnType<typeof ctx.sessionQuery.readSession>>>>()
+    const value = await projectHistoryPreview(request.sources, async (sessionId) => {
       signal.throwIfAborted()
-      const snapshot = await ctx.sessionQuery.readSession(sessionId)
+      const existing = snapshots.get(sessionId)
+      if (existing !== undefined) return await existing
+      const pending = ctx.sessionQuery.readSession(sessionId)
+      snapshots.set(sessionId, pending)
+      const snapshot = await pending
       signal.throwIfAborted()
       return snapshot
     })

@@ -1,4 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import {
+  memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode,
+} from 'react'
 import {
   DisclosureRow,
   IconApiOutline14,
@@ -22,6 +24,15 @@ export interface LoadedPreviewImage {
   readonly release: () => void
 }
 
+/** One turn the official Chat is still producing, below the merged sections. */
+export interface LivePreviewTurn {
+  readonly key: string
+  readonly label: string
+  /** Session the streaming attachments resolve against. */
+  readonly sourceSessionId: string
+  readonly records: readonly HistoryPreviewRecord[]
+}
+
 export interface ChatHistoryPreviewProps {
   readonly response: HistoryPreviewResponse | null
   readonly orderedNodeIds: readonly TurnNodeId[]
@@ -29,6 +40,10 @@ export interface ChatHistoryPreviewProps {
   readonly candidateNodeId: TurnNodeId | null
   /** PA currently stretched open in the adjacent conversation rail. */
   readonly activeNodeId?: TurnNodeId | null
+  /** Selected PAs whose records have not arrived from the Host yet. */
+  readonly pendingNodeIds?: ReadonlySet<TurnNodeId>
+  /** Turns streaming in the source Session, not yet merged into the graph. */
+  readonly liveTurns?: readonly LivePreviewTurn[]
   readonly loading: boolean
   readonly error: string | null
   readonly loadImage: (sourceSessionId: string, attachment: HistoryPreviewImageAttachment) => Promise<LoadedPreviewImage>
@@ -415,8 +430,10 @@ function TurnRecords({
     if (record.kind === 'request') return null
     if (record.kind === 'tool-call') {
       const result = results.get(record.callId)
+      // Keyed by call identity alone: a streaming call keeps its row — and its
+      // open/closed disclosure state — when its result finally lands.
       return <ToolRow
-        key={`tool:${record.callId}:${record.seq}`}
+        key={`tool:${record.callId}`}
         call={record}
         {...result === undefined ? {} : { result }}
         sourceSessionId={sourceSessionId}
@@ -435,14 +452,72 @@ function TurnRecords({
   })}</div>
 }
 
+/**
+ * One rendered turn.
+ *
+ * Memoized on its own record list: the Host projection of a settled PA is
+ * frozen and cached, so a streaming tail, a selection edit elsewhere, or a
+ * rail hover re-renders only the section that actually changed — the same
+ * per-row economics the official chat gets from its keyed node seats.
+ */
+const TurnSection = memo(function TurnSection({
+  records, sourceSessionId, loadImage, locale, nodeId, label, stateLabel, state,
+  railActive, pending,
+}: {
+  readonly records: readonly HistoryPreviewRecord[]
+  readonly sourceSessionId: string
+  readonly loadImage: ChatHistoryPreviewProps['loadImage']
+  readonly locale: Locale
+  readonly nodeId?: TurnNodeId
+  readonly label: string
+  readonly stateLabel: string
+  readonly state: 'selected' | 'candidate' | 'live'
+  readonly railActive: boolean
+  readonly pending: boolean
+}) {
+  return <section
+    className="dsh-git-preview-turn"
+    id={nodeId === undefined ? undefined : `dsh-git-history-${nodeId}`}
+    data-node-id={nodeId}
+    data-preview-state={state}
+    tabIndex={-1}
+    aria-label={`${label} · ${stateLabel}`}
+    aria-busy={pending || undefined}
+    data-rail-active={railActive ? '' : undefined}
+  >
+    <header className="dsh-git-preview-turn-head">
+      <strong>{label}</strong>
+      {separator()}
+      <span>{stateLabel}</span>
+    </header>
+    {pending && records.length === 0
+      ? <div className="dsh-git-muted" role="status">{localized('正在读取该 PA…', 'Loading this PA…', locale)}</div>
+      : <TurnRecords
+        records={records}
+        sourceSessionId={sourceSessionId}
+        loadImage={loadImage}
+        locale={locale}
+      />}
+  </section>
+})
+
 /** Read-only, official-style projection of the exact turns a Merge will seed. */
 export function ChatHistoryPreview({
-  response, orderedNodeIds, labels, candidateNodeId, activeNodeId = null, loading, error, loadImage,
+  response, orderedNodeIds, labels, candidateNodeId, activeNodeId = null,
+  pendingNodeIds, liveTurns, loading, error, loadImage,
 }: ChatHistoryPreviewProps) {
   const locale = useLocale()
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const columnRef = useRef<HTMLDivElement | null>(null)
   const atBottomRef = useRef(true)
   const [atBottom, setAtBottom] = useState(true)
+
+  // Keeps the memoized sections memoized: the injected loader is rebuilt by
+  // the plugin face, this identity never is.
+  const loadImageRef = useRef(loadImage)
+  loadImageRef.current = loadImage
+  const stableLoadImage = useCallback<ChatHistoryPreviewProps['loadImage']>(
+    (sourceSessionId, attachment) => loadImageRef.current(sourceSessionId, attachment), [])
 
   const scrollToBottom = () => {
     const element = scrollRef.current
@@ -456,13 +531,28 @@ export function ChatHistoryPreview({
     if (response !== null && atBottomRef.current) scrollToBottom()
   }, [response])
 
-  if (loading && response === null) {
+  // Streaming grows the flow token by token, well below the render cadence a
+  // response-keyed effect can see. Follow the measured column instead, and
+  // only while the reader is still pinned to the floor.
+  useEffect(() => {
+    const column = columnRef.current
+    const element = scrollRef.current
+    if (column === null || element === null || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => {
+      if (atBottomRef.current) element.scrollTop = element.scrollHeight
+    })
+    observer.observe(column)
+    return () => { observer.disconnect() }
+  }, [])
+
+  const live = liveTurns ?? []
+  if (loading && response === null && live.length === 0) {
     return <div className="dsh-git-chat-status" role="status">{localized('正在读取完整 Chat History…', 'Loading complete Chat History…', locale)}</div>
   }
-  if (error !== null && response === null) {
+  if (error !== null && response === null && live.length === 0) {
     return <div className="dsh-git-chat-status dsh-git-error" role="alert">{error}</div>
   }
-  if (response === null || response.turns.length === 0) {
+  if ((response === null || response.turns.length === 0) && live.length === 0) {
     return <div className="dsh-git-chat-status">{localized('选择 PA 后，这里会显示合并后的聊天记录。', 'Select PAs to preview the merged chat history.', locale)}</div>
   }
 
@@ -477,37 +567,41 @@ export function ChatHistoryPreview({
       setAtBottom(next)
     }}
   >
-    <div className="dsh-git-preview-column">
-      {response.turns.map((turn, index) => {
+    <div className="dsh-git-preview-column" ref={columnRef}>
+      {(response?.turns ?? []).map((turn, index) => {
         const nodeId = orderedNodeIds[index]
         const candidate = nodeId !== undefined && nodeId === candidateNodeId
         const label = nodeId === undefined ? `PA${turn.targetTurn}` : labels.get(nodeId) ?? `PA${turn.targetTurn}`
+        const pending = nodeId !== undefined && pendingNodeIds?.has(nodeId) === true
         const stateLabel = candidate
           ? localized('虚线预览', 'dashed preview', locale)
           : localized('已加入', 'included', locale)
-        return <section
-          className="dsh-git-preview-turn"
-          id={nodeId === undefined ? undefined : `dsh-git-history-${nodeId}`}
+        return <TurnSection
           key={`${turn.source.sourceSessionId}:${turn.source.sourceTurn}:${turn.source.sourceBoundarySeq}`}
-          data-preview-state={candidate ? 'candidate' : 'selected'}
-          data-node-id={nodeId}
-          data-rail-active={nodeId !== undefined && nodeId === activeNodeId ? '' : undefined}
-          tabIndex={-1}
-          aria-label={`${label} · ${stateLabel}`}
-        >
-          <header className="dsh-git-preview-turn-head">
-            <strong>{label}</strong>
-            {separator()}
-            <span>{stateLabel}</span>
-          </header>
-          <TurnRecords
-            records={turn.records}
-            sourceSessionId={turn.source.sourceSessionId}
-            loadImage={loadImage}
-            locale={locale}
-          />
-        </section>
+          records={turn.records}
+          sourceSessionId={turn.source.sourceSessionId}
+          loadImage={stableLoadImage}
+          locale={locale}
+          {...nodeId === undefined ? {} : { nodeId }}
+          label={label}
+          stateLabel={stateLabel}
+          state={candidate ? 'candidate' : 'selected'}
+          railActive={nodeId !== undefined && nodeId === activeNodeId}
+          pending={pending}
+        />
       })}
+      {live.map(turn => <TurnSection
+        key={turn.key}
+        records={turn.records}
+        sourceSessionId={turn.sourceSessionId}
+        loadImage={stableLoadImage}
+        locale={locale}
+        label={turn.label}
+        stateLabel={localized('生成中', 'streaming', locale)}
+        state="live"
+        railActive={false}
+        pending={false}
+      />)}
       {loading ? <div className="dsh-git-muted" role="status">{localized('正在更新预览…', 'Updating preview…', locale)}</div> : null}
       {error === null ? null : <div className="dsh-git-error" role="alert">{error}</div>}
     </div>

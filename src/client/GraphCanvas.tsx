@@ -1,5 +1,5 @@
 import {
-  useCallback, useEffect, useMemo, useRef, useState,
+  memo, useCallback, useEffect, useMemo, useRef, useState,
   type CSSProperties, type FocusEvent as ReactFocusEvent, type PointerEvent as ReactPointerEvent,
 } from 'react'
 import { orderedNodes, primaryPath } from './graph.ts'
@@ -152,7 +152,7 @@ function connector(parent: TreePosition, child: TreePosition): string {
 }
 
 /** Compact tree visualization: node details are intentionally kept out of the graph. */
-export function GraphCanvas({
+function GraphCanvasView({
   state, previewNodeId, onPreview, selectedNodeIds, candidateNodeId, disabled = false,
   labels: suppliedLabels, nodeColors,
 }: GraphCanvasProps) {
@@ -402,3 +402,10 @@ export function GraphCanvas({
     </div>
   </div>
 }
+
+/**
+ * Memoized at the seam: laying out the tree is the most expensive render in
+ * the workbench, and nothing about it changes while an answer streams beside
+ * it. Callers must keep `state` and the id arrays referentially stable.
+ */
+export const GraphCanvas = memo(GraphCanvasView)

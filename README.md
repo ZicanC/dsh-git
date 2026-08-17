@@ -138,6 +138,8 @@ The test suite is organized as follows:
 - `components.spec.tsx`: covers separation between `HEAD`, preview, and selection, plus composer behavior when branch creation fails.
 - `project-history.spec.ts`: covers completed-turn extraction, fork-seed metadata, and RPC payload validation.
 - `project-graph.spec.ts`: covers fork deduplication, exact preservation of merge relationships, and timeline prefixes.
+- `preview-cache.spec.ts`: covers reading each PA once, local assembly of the selected order, and cache eviction.
+- `live-turn.spec.ts`: covers the Chat History live tail projected from the running turn (partial answer, running tool calls, open turns only).
 - `project-page.spec.tsx` / `project-bridge.spec.tsx`: cover timeline scrubbing, detail inspection, retry, source navigation, DOM reinjection, and cleanup.
 
 To run a smoke test without modifying the user's real DSH profile:

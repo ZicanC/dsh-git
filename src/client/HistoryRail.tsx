@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type FocusEvent } from 'react'
+import { memo, useEffect, useState, type CSSProperties, type FocusEvent } from 'react'
 import { localized, useLocale } from './i18n.ts'
 import type { HistoryRailEntry, HistoryRailModel } from './history-rail.ts'
 import type { TurnNodeId } from './types.ts'
@@ -19,7 +19,7 @@ export interface HistoryRailProps extends HistoryRailModel {
  * mode a dash stretches into its PA/title row. When Chat History owns the full
  * workbench, the same entries become rows whose hover card summarizes the PA.
  */
-export function HistoryRail({
+function HistoryRailView({
   entries, includedCount, previewCount, disabled = false, expanded = false,
   onSelect, onActiveChange,
 }: HistoryRailProps) {
@@ -186,3 +186,6 @@ export function HistoryRail({
     </div>
   </nav>
 }
+
+/** Memoized: the trail only changes with the selection, never with a delta. */
+export const HistoryRail = memo(HistoryRailView)

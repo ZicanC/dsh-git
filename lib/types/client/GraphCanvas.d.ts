@@ -18,4 +18,11 @@ export interface GraphCanvasProps {
     readonly nodeColors?: ReadonlyMap<TurnNodeId, number>;
 }
 /** Compact tree visualization: node details are intentionally kept out of the graph. */
-export declare function GraphCanvas({ state, previewNodeId, onPreview, selectedNodeIds, candidateNodeId, disabled, labels: suppliedLabels, nodeColors, }: GraphCanvasProps): import("react").JSX.Element;
+declare function GraphCanvasView({ state, previewNodeId, onPreview, selectedNodeIds, candidateNodeId, disabled, labels: suppliedLabels, nodeColors, }: GraphCanvasProps): import("react").JSX.Element;
+/**
+ * Memoized at the seam: laying out the tree is the most expensive render in
+ * the workbench, and nothing about it changes while an answer streams beside
+ * it. Callers must keep `state` and the id arrays referentially stable.
+ */
+export declare const GraphCanvas: import("react").MemoExoticComponent<typeof GraphCanvasView>;
+export {};

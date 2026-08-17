@@ -55,13 +55,29 @@ function previewFor(sources: readonly HistoryTurnSource[]): HistoryPreviewRespon
   }
 }
 
+/** Mutable holder so a test can publish a later conversation snapshot. */
+interface LiveSession {
+  snapshot: {
+    chat: { timeline: { turnOrder: readonly number[]; turns: Map<number, unknown> } }
+    nodes: readonly unknown[]
+    partial: unknown
+    runningCalls: readonly unknown[]
+  }
+}
+
 function graphViewFixture(
   state: GraphState,
   input: { draft?: string; imageIds?: readonly string[]; occurrences?: readonly unknown[] } = {},
+  session: Partial<LiveSession['snapshot']> = {},
 ) {
-  const sessionSnapshot = {
-    chat: { timeline: { turnOrder: [], turns: new Map() } },
-    nodes: [],
+  const live: LiveSession = {
+    snapshot: {
+      chat: { timeline: { turnOrder: [], turns: new Map() } },
+      nodes: [],
+      partial: null,
+      runningCalls: [],
+      ...session,
+    },
   }
   const inputSnapshot = {
     draft: input.draft ?? '',
@@ -79,7 +95,7 @@ function graphViewFixture(
   const tray = new ContextTrayChannel()
   const props = {
     sessionId: 'session-a',
-    useSession: (selector: (value: unknown) => unknown) => selector(sessionSnapshot),
+    useSession: (selector: (value: unknown) => unknown) => selector(live.snapshot),
     useInput: (selector: (value: unknown) => unknown) => selector(inputSnapshot),
     inputActions: { submit },
     useGraph: (selector: (value: GraphState) => unknown) => selector(state),
@@ -92,7 +108,7 @@ function graphViewFixture(
     setComposerBlocked,
     createMergedSession,
   }
-  return { props, tray, submit, setComposerBlocked, createMergedSession, loadHistoryPreview }
+  return { props, tray, live, submit, setComposerBlocked, createMergedSession, loadHistoryPreview }
 }
 
 type GraphViewFixture = ReturnType<typeof graphViewFixture>
@@ -158,17 +174,15 @@ describe('graph UI', () => {
     expect(view.container.querySelector('.dsh-git-chat-body-rail-expanded')).toBeTruthy()
     expect(view.container.querySelector('.dsh-git-rail-expanded')).toBeTruthy()
     expect(view.container.querySelectorAll('.dsh-git-rail-expanded-row')).toHaveLength(2)
-    const historyTarget = document.createElement('section')
-    historyTarget.id = `dsh-git-history-${two.id}`
-    historyTarget.tabIndex = -1
-    document.body.append(historyTarget)
+    // The Chat History section for a selected PA exists from the first render
+    // (its records stream in later), so the rail jumps to the real section.
+    const historyTarget = document.getElementById(`dsh-git-history-${two.id}`) as HTMLElement
     const scrollIntoView = vi.fn()
     historyTarget.scrollIntoView = scrollIntoView
     fireEvent.click(within(view.container.querySelector('.dsh-git-rail-expanded') as HTMLElement)
       .getByRole('button', { name: 'PA2 · Question two' }))
     expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start', inline: 'nearest' })
     expect(document.activeElement).toBe(historyTarget)
-    historyTarget.remove()
     const open = within(chatHeading as HTMLElement)
       .getByRole('button', { name: '打开 Conversation Graph', expanded: false })
     fireEvent.click(open)
@@ -501,5 +515,92 @@ describe('graph UI', () => {
     // The prompt and answer bodies live in Chat History, not in this window.
     expect(within(panel).queryByText('PROMPT')).toBeNull()
     expect(within(panel).queryByText('ANSWER')).toBeNull()
+  })
+
+  it('reads every PA once: adding fetches only the new one, removing and re-adding fetch nothing', async () => {
+    const fixture = graphViewFixture(state)
+    const view = renderGraphView(fixture)
+    const section = (nodeId: string) =>
+      view.container.querySelector(`.dsh-git-preview-turn[data-node-id="${nodeId}"]`)
+    await vi.waitFor(() => expect(screen.getByText('Preview prompt 2')).toBeTruthy())
+    expect(fixture.loadHistoryPreview).toHaveBeenCalledTimes(1)
+    expect(fixture.loadHistoryPreview.mock.calls[0]?.[0]).toEqual([
+      { sourceSessionId: 'session-a', sourceTurn: 1, sourceBoundarySeq: 5 },
+      { sourceSessionId: 'session-a', sourceTurn: 2, sourceBoundarySeq: 10 },
+    ])
+
+    fireEvent.click(screen.getByRole('button', { name: '查看 PA3 context' }))
+    fireEvent.click(screen.getByRole('button', { name: '加入 Context' }))
+
+    await vi.waitFor(() => expect(fixture.loadHistoryPreview).toHaveBeenCalledTimes(2))
+    // Only the PA that was never read is requested, and the settled PAs stay
+    // on screen instead of blanking to a full-panel loading state.
+    expect(fixture.loadHistoryPreview.mock.calls[1]?.[0]).toEqual([
+      { sourceSessionId: 'session-b', sourceTurn: 1, sourceBoundarySeq: 8 },
+    ])
+    expect(within(section(one.id) as HTMLElement).getByText('Preview prompt 1')).toBeTruthy()
+    await vi.waitFor(() => expect(screen.getAllByRole('article', { name: '用户消息' })).toHaveLength(3))
+
+    fireEvent.click(screen.getByRole('button', { name: '查看 PA1 context' }))
+    fireEvent.click(screen.getByRole('button', { name: '移出 Context' }))
+    await vi.waitFor(() => expect(section(one.id)).toBeNull())
+
+    fireEvent.click(screen.getByRole('button', { name: '查看 PA1 context' }))
+    fireEvent.click(screen.getByRole('button', { name: '加入 Context' }))
+    // Re-adding renders from the cache: the records are already on screen in
+    // the same commit, with no Host round trip and no loading state.
+    expect(within(section(one.id) as HTMLElement).getByText('Preview prompt 1')).toBeTruthy()
+    expect(fixture.loadHistoryPreview).toHaveBeenCalledTimes(2)
+  })
+
+  it('streams the running turn under the merged history until the graph owns it', async () => {
+    const openTurn = {
+      turn: 3,
+      start: { seq: 100, type: 'turn/start', data: { turn: 3 } },
+      end: undefined,
+      status: 'open',
+      steps: [],
+      data: { get: () => undefined },
+    }
+    const fixture = graphViewFixture(state, {}, {
+      chat: { timeline: { turnOrder: [3], turns: new Map([[3, openTurn]]) } },
+      nodes: [{
+        kind: 'user', seq: 101, time: 1,
+        content: [{ type: 'text', text: 'Just sent question' }],
+        source: { kind: 'user' },
+      }],
+      partial: { turn: 3, step: 1, blocks: [{ kind: 'text', text: 'Answer so' }] },
+    })
+    const view = renderGraphView(fixture)
+
+    const live = view.container.querySelector('[data-preview-state="live"]') as HTMLElement
+    expect(within(live).getByText('Just sent question')).toBeTruthy()
+    expect(within(live).getByText('Answer so')).toBeTruthy()
+    expect(within(live).getByText('生成中')).toBeTruthy()
+    // The tail is not a PA: it never joins the selection or the Merge order.
+    expect(screen.getByLabelText('Chat History').querySelector('.dsh-git-heading')?.textContent)
+      .toContain('2 已加入')
+
+    fixture.live.snapshot = {
+      ...fixture.live.snapshot,
+      partial: { turn: 3, step: 1, blocks: [{ kind: 'text', text: 'Answer so far, extended' }] },
+    }
+    act(() => { view.rerender(<GraphViewHarness fixture={fixture} />) })
+
+    expect(within(view.container.querySelector('[data-preview-state="live"]') as HTMLElement)
+      .getByText('Answer so far, extended')).toBeTruthy()
+    // Reading the streaming turn never asks the Host for a merged projection.
+    expect(fixture.loadHistoryPreview).toHaveBeenCalledTimes(1)
+
+    // Once the turn closes and the graph registers it as PA3 of this Session,
+    // the live copy gives way to the merged section.
+    const closed = graph([one, two, three], {
+      sessionTurnRefs: { 'session-a': { 1: one.id, 2: two.id, 3: three.id }, 'session-b': {} },
+    })
+    const settled = graphViewFixture(closed, {}, fixture.live.snapshot)
+    cleanup()
+    renderGraphView(settled)
+
+    expect(document.querySelector('[data-preview-state="live"]')).toBeNull()
   })
 })
