@@ -1,4 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import {
+  useCallback, useEffect, useMemo, useRef, useState,
+  type CSSProperties, type FocusEvent as ReactFocusEvent, type PointerEvent as ReactPointerEvent,
+} from 'react'
 import { orderedNodes, primaryPath } from './graph.ts'
 import { nodeLabelMap } from './labels.ts'
 import { localized, useLocale } from './i18n.ts'
@@ -12,6 +15,16 @@ const HORIZONTAL_GAP = 24
 const VERTICAL_GAP = 58
 const STAGE_PADDING = 32
 
+// Zoom bounds for the pan/zoom stage. Below the floor the labels stop being
+// readable; above the ceiling a single node fills the panel.
+export const MIN_SCALE = 0.25
+export const MAX_SCALE = 2.5
+const ZOOM_STEP = 1.2
+// Breathing room kept around the graph when it is fitted into the viewport.
+const FIT_PADDING = 16
+// Keyboard focus must not land on a node parked outside the visible area.
+const FOCUS_MARGIN = 12
+
 interface TreePosition {
   readonly nodeId: TurnNodeId
   readonly x: number
@@ -22,6 +35,35 @@ interface TreeLayout {
   readonly positions: readonly TreePosition[]
   readonly width: number
   readonly height: number
+}
+
+interface Viewport {
+  readonly width: number
+  readonly height: number
+}
+
+/** Stage transform in viewport pixels: translate first, then scale. */
+interface Transform {
+  readonly x: number
+  readonly y: number
+  readonly scale: number
+}
+
+function clampScale(scale: number): number {
+  return Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale))
+}
+
+/** Center the whole graph in the viewport, never magnifying past 1:1. */
+function fitTransform(viewport: Viewport, layout: TreeLayout): Transform {
+  if (viewport.width === 0 || viewport.height === 0) return { x: 0, y: 0, scale: 1 }
+  const usableWidth = Math.max(1, viewport.width - FIT_PADDING * 2)
+  const usableHeight = Math.max(1, viewport.height - FIT_PADDING * 2)
+  const scale = clampScale(Math.min(1, usableWidth / layout.width, usableHeight / layout.height))
+  return {
+    scale,
+    x: (viewport.width - layout.width * scale) / 2,
+    y: (viewport.height - layout.height * scale) / 2,
+  }
 }
 
 /** Presentation-only props for the compact conversation tree. */
@@ -39,8 +81,6 @@ export interface GraphCanvasProps {
   readonly labels?: ReadonlyMap<TurnNodeId, string>
   /** Optional stable color index per project Session. */
   readonly nodeColors?: ReadonlyMap<TurnNodeId, number>
-  /** Disable fit-to-viewport so large project graphs remain scrollable. */
-  readonly fit?: boolean
 }
 
 /** Lay out the primary-parent tree; secondary parents are drawn as merge edges. */
@@ -114,12 +154,20 @@ function connector(parent: TreePosition, child: TreePosition): string {
 /** Compact tree visualization: node details are intentionally kept out of the graph. */
 export function GraphCanvas({
   state, previewNodeId, onPreview, selectedNodeIds, candidateNodeId, disabled = false,
-  labels: suppliedLabels, nodeColors, fit = true,
+  labels: suppliedLabels, nodeColors,
 }: GraphCanvasProps) {
   const locale = useLocale()
   const viewportRef = useRef<HTMLDivElement>(null)
-  const [viewport, setViewport] = useState({ width: 0, height: 0 })
+  const [viewport, setViewport] = useState<Viewport>({ width: 0, height: 0 })
+  const [transform, setTransform] = useState<Transform>({ x: 0, y: 0, scale: 1 })
+  const [panning, setPanning] = useState(false)
+  // Once the user drives the canvas themselves, automatic re-centering stops
+  // until they ask for it back through the fit control.
+  const adjustedRef = useRef(false)
+  const panRef = useRef<{ pointerId: number, x: number, y: number } | null>(null)
   const layout = useMemo(() => layoutTree(state), [state])
+  const layoutRef = useRef(layout)
+  layoutRef.current = layout
   const automaticLabels = useMemo(() => nodeLabelMap(state), [state])
   const labels = suppliedLabels ?? automaticLabels
   const byId = useMemo(() => new Map(layout.positions.map(position => [position.nodeId, position])), [layout])
@@ -127,35 +175,156 @@ export function GraphCanvas({
   const context = new Set(state.contextManifest)
   const selectedNodes = useMemo(() => new Set(selectedNodeIds ?? []), [selectedNodeIds])
   const selectionMode = selectedNodeIds !== undefined || candidateNodeId !== undefined
+  // The empty state renders no viewport, so both listeners have to re-bind
+  // when the first PA turns this into a real canvas.
+  const hasGraph = layout.positions.length > 0
 
   useEffect(() => {
     const element = viewportRef.current
     if (element === null) return
-    const update = (): void => setViewport({ width: element.clientWidth, height: element.clientHeight })
+    const update = (): void => setViewport(current =>
+      current.width === element.clientWidth && current.height === element.clientHeight
+        ? current
+        : { width: element.clientWidth, height: element.clientHeight })
     update()
     if (typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(update)
     observer.observe(element)
     return () => observer.disconnect()
+  }, [hasGraph])
+
+  // Entering the graph — and every later resize or graph change the user has
+  // not overridden — lands on a centered, fully visible view.
+  useEffect(() => {
+    if (adjustedRef.current) return
+    if (viewport.width === 0 || viewport.height === 0) return
+    setTransform(fitTransform(viewport, layout))
+  }, [viewport, layout])
+
+  /** Zoom around a viewport-relative anchor so the point under it stays put. */
+  const zoomBy = useCallback((factor: number, anchorX: number, anchorY: number): void => {
+    adjustedRef.current = true
+    setTransform((current) => {
+      const scale = clampScale(current.scale * factor)
+      if (scale === current.scale) return current
+      const ratio = scale / current.scale
+      return {
+        scale,
+        x: anchorX - (anchorX - current.x) * ratio,
+        y: anchorY - (anchorY - current.y) * ratio,
+      }
+    })
   }, [])
+
+  const resetView = useCallback((): void => {
+    const element = viewportRef.current
+    if (element === null) return
+    adjustedRef.current = false
+    setTransform(fitTransform(
+      { width: element.clientWidth, height: element.clientHeight }, layoutRef.current,
+    ))
+  }, [])
+
+  // Wheel must be a non-passive native listener: React's synthetic wheel
+  // handler cannot cancel the surrounding page scroll.
+  useEffect(() => {
+    const element = viewportRef.current
+    if (element === null) return
+    const onWheel = (event: WheelEvent): void => {
+      event.preventDefault()
+      const rect = element.getBoundingClientRect()
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? rect.height : 1
+      if (event.shiftKey && !event.ctrlKey && !event.metaKey) {
+        const shift = (event.deltaX === 0 ? event.deltaY : event.deltaX) * unit
+        adjustedRef.current = true
+        setTransform(current => ({ ...current, x: current.x - shift }))
+        return
+      }
+      // Trackpad pinch arrives as ctrl+wheel with much smaller deltas.
+      const intensity = event.ctrlKey || event.metaKey ? 0.01 : 0.002
+      zoomBy(
+        Math.exp(-event.deltaY * unit * intensity),
+        event.clientX - rect.left,
+        event.clientY - rect.top,
+      )
+    }
+    element.addEventListener('wheel', onWheel, { passive: false })
+    return () => element.removeEventListener('wheel', onWheel)
+  }, [zoomBy, hasGraph])
+
+  const startPan = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (event.button !== 0 && event.button !== 1) return
+    // Left-dragging a node is a click on that node, not a canvas pan.
+    if (event.button === 0 && (event.target as HTMLElement).closest('button') !== null) return
+    // Middle-drag pans instead of arming the browser's autoscroll ring.
+    if (event.button === 1) event.preventDefault()
+    panRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY }
+    setPanning(true)
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+  }
+
+  const continuePan = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    const pan = panRef.current
+    if (pan === null || pan.pointerId !== event.pointerId) return
+    const dx = event.clientX - pan.x
+    const dy = event.clientY - pan.y
+    panRef.current = { pointerId: pan.pointerId, x: event.clientX, y: event.clientY }
+    adjustedRef.current = true
+    setTransform(current => ({ ...current, x: current.x + dx, y: current.y + dy }))
+  }
+
+  const endPan = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (panRef.current?.pointerId !== event.pointerId) return
+    panRef.current = null
+    setPanning(false)
+    event.currentTarget.releasePointerCapture?.(event.pointerId)
+  }
+
+  // Tabbing through nodes must not focus something parked off-canvas.
+  const revealFocusedNode = (event: ReactFocusEvent<HTMLDivElement>): void => {
+    const nodeId = (event.target as HTMLElement).dataset?.nodeId
+    if (nodeId === undefined) return
+    const position = byId.get(nodeId as TurnNodeId)
+    const element = viewportRef.current
+    if (position === undefined || element === null) return
+    setTransform((current) => {
+      const left = (position.x - NODE_WIDTH / 2) * current.scale + current.x
+      const top = position.y * current.scale + current.y
+      const right = left + NODE_WIDTH * current.scale
+      const bottom = top + NODE_HEIGHT * current.scale
+      const dx = left < FOCUS_MARGIN
+        ? FOCUS_MARGIN - left
+        : right > element.clientWidth - FOCUS_MARGIN ? element.clientWidth - FOCUS_MARGIN - right : 0
+      const dy = top < FOCUS_MARGIN
+        ? FOCUS_MARGIN - top
+        : bottom > element.clientHeight - FOCUS_MARGIN ? element.clientHeight - FOCUS_MARGIN - bottom : 0
+      return dx === 0 && dy === 0 ? current : { ...current, x: current.x + dx, y: current.y + dy }
+    })
+  }
 
   if (layout.positions.length === 0) {
     return <div className="dsh-git-empty">{localized('完成第一轮对话后，这里会出现第一条 branch。', 'The first branch will appear here after you complete a conversation turn.', locale)}</div>
   }
 
-  const availableWidth = Math.max(0, viewport.width - 24)
-  const availableHeight = Math.max(0, viewport.height - 24)
-  const scale = !fit || viewport.width === 0 || viewport.height === 0
-    ? 1
-    : Math.min(1, availableWidth / layout.width, availableHeight / layout.height)
-  const fittedWidth = layout.width * scale
-  const fittedHeight = layout.height * scale
+  const zoomAtCenter = (factor: number): void => zoomBy(factor, viewport.width / 2, viewport.height / 2)
 
-  return <div ref={viewportRef} className={`dsh-git-tree-viewport ${fit ? '' : 'dsh-git-tree-viewport-scroll'}`}>
-    <div className="dsh-git-tree-fit" style={{ width: fittedWidth, height: fittedHeight }}>
+  return <div
+    ref={viewportRef}
+    className={`dsh-git-tree-viewport ${panning ? 'dsh-git-tree-viewport-panning' : ''}`}
+    onPointerDown={startPan}
+    onPointerMove={continuePan}
+    onPointerUp={endPan}
+    onPointerCancel={endPan}
+    onDoubleClick={event => { if ((event.target as HTMLElement).closest('button') === null) resetView() }}
+    onFocusCapture={revealFocusedNode}
+  >
       <div
         className="dsh-git-tree-stage"
-        style={{ width: layout.width, height: layout.height, transform: `scale(${scale})` }}
+        style={{
+          width: layout.width,
+          height: layout.height,
+          transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
+        }}
       >
       <svg className="dsh-git-tree-svg" width={layout.width} height={layout.height} aria-hidden="true">
         {orderedNodes(state).flatMap(node => node.parentIds.map(parentId => {
@@ -211,6 +380,25 @@ export function GraphCanvas({
         </button>
       })}
       </div>
+    <div className="dsh-git-tree-zoom" role="group" aria-label={localized('缩放', 'Zoom', locale)}>
+      <button
+        type="button"
+        aria-label={localized('缩小', 'Zoom out', locale)}
+        disabled={transform.scale <= MIN_SCALE + 0.001}
+        onClick={() => zoomAtCenter(1 / ZOOM_STEP)}
+      >−</button>
+      <button
+        type="button"
+        className="dsh-git-tree-zoom-value"
+        aria-label={localized('居中并适应窗口', 'Center and fit to window', locale)}
+        onClick={resetView}
+      >{Math.round(transform.scale * 100)}%</button>
+      <button
+        type="button"
+        aria-label={localized('放大', 'Zoom in', locale)}
+        disabled={transform.scale >= MAX_SCALE - 0.001}
+        onClick={() => zoomAtCenter(ZOOM_STEP)}
+      >+</button>
     </div>
   </div>
 }

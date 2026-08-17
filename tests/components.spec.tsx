@@ -483,25 +483,23 @@ describe('graph UI', () => {
     expect(screen.getByText(/2 PA · About \d+ tokens/)).toBeTruthy()
   })
 
-  it('renders prompt and answer Markdown in the PA Context Window', async () => {
-    const markdownNode = node({
-      id: 'pa-markdown',
-      prompt: '## Prompt heading\n\nUse **rendered text**.',
-      answer: 'Answer with `inline code` and:\n\n- first item\n- second item',
-      createdAt: 1,
-    })
-    const markdownState = graph([markdownNode], {
-      sessionTurnRefs: { 'session-a': { 1: markdownNode.id } },
-    })
-    const fixture = graphViewFixture(markdownState)
+  it('keeps the PA Context Window to number, title, hash, Context and the action', async () => {
+    const fixture = graphViewFixture(state)
     renderGraphView(fixture)
     await vi.waitFor(() => expect(screen.getByRole('button', { name: '查看 PA1 context' }).getAttribute('data-selection-state')).toBe('selected'))
 
-    fireEvent.click(screen.getByRole('button', { name: '查看 PA1 context' }))
+    fireEvent.click(screen.getByRole('button', { name: '查看 PA3 context' }))
     const panel = screen.getByLabelText('PA Context Window')
-    expect(within(panel).getByRole('heading', { level: 2, name: 'Prompt heading' })).toBeTruthy()
-    expect(within(panel).getByText('rendered text').tagName).toBe('STRONG')
-    expect(within(panel).getByText('inline code').tagName).toBe('CODE')
-    expect(within(panel).getByRole('list').children).toHaveLength(2)
+    // Number, hash and the commit action share the heading bar.
+    const heading = panel.querySelector('.dsh-git-heading') as HTMLElement
+    expect(within(heading).getByText('PA3 Context')).toBeTruthy()
+    expect(within(heading).getByText('PA-ca11d')).toBeTruthy()
+    expect(within(heading).getByRole('button', { name: '加入 Context' })).toBeTruthy()
+    expect(within(heading).getByRole('button', { name: '关闭 PA Context Window' })).toBeTruthy()
+    expect(within(panel).getByRole('heading', { level: 3 }).textContent).toBe('Question three')
+    expect(within(panel).getByLabelText('回答时使用的 Context')).toBeTruthy()
+    // The prompt and answer bodies live in Chat History, not in this window.
+    expect(within(panel).queryByText('PROMPT')).toBeNull()
+    expect(within(panel).queryByText('ANSWER')).toBeNull()
   })
 })

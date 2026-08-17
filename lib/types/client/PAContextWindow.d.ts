@@ -9,5 +9,9 @@ export interface PAContextWindowProps {
     readonly onRemove: () => void;
     readonly onClose: () => void;
 }
-/** Details and the explicit commit/remove action for one PA selection. */
+/**
+ * Compact summary of one PA selection: number, title, hash, the Context that
+ * answered it, and the explicit commit/remove action. The prompt and answer
+ * bodies stay in Chat History rather than being repeated here.
+ */
 export declare function PAContextWindow({ state, nodeId, label, selected, disabled, onAdd, onRemove, onClose, }: PAContextWindowProps): import("react").JSX.Element | null;

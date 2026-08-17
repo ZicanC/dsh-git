@@ -112,7 +112,6 @@ export function ProjectGraphPage({
                 onPreview={setInspectedId}
                 labels={labels}
                 nodeColors={nodeColors}
-                fit={false}
               />
             </section>
             {inspected === undefined ? null : <aside className="dsh-git-project-inspector" aria-label={localized('项目 PA 详情', 'Project PA details', locale)}>
