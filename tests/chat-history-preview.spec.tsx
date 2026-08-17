@@ -358,3 +358,157 @@ describe('ChatHistoryPreview official-style projection', () => {
     expect(screen.getByLabelText('Turn 1 · streaming')).toBeTruthy()
   })
 })
+
+/** jsdom has no layout: the observer and the scroll metrics are supplied here. */
+class TestResizeObserver {
+  static instances: TestResizeObserver[] = []
+  readonly targets: Element[] = []
+  constructor(readonly notify: () => void) { TestResizeObserver.instances.push(this) }
+  observe(target: Element): void { this.targets.push(target) }
+  unobserve(): void {}
+  disconnect(): void { this.targets.length = 0 }
+}
+
+function measure(element: HTMLElement, scrollHeight: number, clientHeight = 400): void {
+  Object.defineProperty(element, 'scrollHeight', { value: scrollHeight, configurable: true })
+  Object.defineProperty(element, 'clientHeight', { value: clientHeight, configurable: true })
+}
+
+function liveTurn(turn: number, text: string): NonNullable<ChatHistoryPreviewProps['liveTurns']>[number] {
+  return {
+    key: `live-turn:${turn}`,
+    label: `Turn ${turn}`,
+    sourceSessionId: 'source-session-1',
+    records: [{
+      kind: 'assistant',
+      seq: 9,
+      step: 1,
+      messageId: `live-${turn}`,
+      blocks: [{ type: 'text', text }],
+      provenance: { provider: '', model: '' },
+    }],
+  }
+}
+
+const settled: HistoryPreviewResponse = {
+  turns: [{
+    source: { sourceSessionId: 'source-session-1', sourceTurn: 1, sourceBoundarySeq: 10 },
+    targetTurn: 1,
+    records: [{
+      kind: 'user',
+      seq: 1,
+      messageId: 'settled',
+      content: [{ type: 'text', text: 'settled prompt' }],
+      source: { kind: 'user' },
+    }],
+  }],
+}
+
+describe('ChatHistoryPreview scroll follow', () => {
+  beforeEach(() => {
+    TestResizeObserver.instances = []
+    Reflect.set(globalThis, 'ResizeObserver', TestResizeObserver)
+  })
+
+  afterEach(() => {
+    Reflect.deleteProperty(globalThis, 'ResizeObserver')
+  })
+
+  function renderFollow(liveTurns: ChatHistoryPreviewProps['liveTurns'], response = settled) {
+    return render(<ChatHistoryPreview
+      response={response}
+      orderedNodeIds={[firstId]}
+      labels={new Map([[firstId, 'PA1']])}
+      candidateNodeId={null}
+      activeNodeId={null}
+      liveTurns={liveTurns}
+      loading={false}
+      error={null}
+      loadImage={unavailableImage}
+    />)
+  }
+
+  it('follows a streaming turn to the floor and stops once the reader scrolls up', () => {
+    const view = renderFollow([liveTurn(1, 'first token')])
+    const scroller = view.container.querySelector('.dsh-git-chat-history') as HTMLElement
+    const observer = TestResizeObserver.instances.at(-1)
+    expect(observer?.targets).toContain(view.container.querySelector('.dsh-git-preview-column'))
+
+    // Streaming grows the column: the pinned reader rides it down.
+    measure(scroller, 1200)
+    observer?.notify()
+    expect(scroller.scrollTop).toBe(1200)
+
+    // Reading history detaches the follow, and the way back is offered.
+    scroller.scrollTop = 0
+    fireEvent.scroll(scroller)
+    expect(screen.getByRole('button', { name: 'Back to bottom' })).toBeTruthy()
+    measure(scroller, 1600)
+    observer?.notify()
+    expect(scroller.scrollTop).toBe(0)
+
+    // Back to bottom re-attaches it.
+    fireEvent.click(screen.getByRole('button', { name: 'Back to bottom' }))
+    expect(scroller.scrollTop).toBe(1600)
+    measure(scroller, 1900)
+    observer?.notify()
+    expect(scroller.scrollTop).toBe(1900)
+  })
+
+  it('lands on a newly submitted turn even when the reader had scrolled up', () => {
+    const view = renderFollow([liveTurn(1, 'first token')])
+    const scroller = view.container.querySelector('.dsh-git-chat-history') as HTMLElement
+    measure(scroller, 1200)
+    scroller.scrollTop = 0
+    fireEvent.scroll(scroller)
+    expect(scroller.scrollTop).toBe(0)
+
+    view.rerender(<ChatHistoryPreview
+      response={settled}
+      orderedNodeIds={[firstId]}
+      labels={new Map([[firstId, 'PA1']])}
+      candidateNodeId={null}
+      activeNodeId={null}
+      liveTurns={[liveTurn(1, 'first token'), liveTurn(2, 'just submitted')]}
+      loading={false}
+      error={null}
+      loadImage={unavailableImage}
+    />)
+
+    expect(scroller.scrollTop).toBe(1200)
+    expect(screen.queryByRole('button', { name: 'Back to bottom' })).toBeNull()
+  })
+
+  it('observes the flow that mounts after the initial loading status view', () => {
+    const view = render(<ChatHistoryPreview
+      response={null}
+      orderedNodeIds={[]}
+      labels={new Map()}
+      candidateNodeId={null}
+      activeNodeId={null}
+      loading
+      error={null}
+      loadImage={unavailableImage}
+    />)
+    expect(view.container.querySelector('.dsh-git-chat-history')).toBeNull()
+
+    view.rerender(<ChatHistoryPreview
+      response={settled}
+      orderedNodeIds={[firstId]}
+      labels={new Map([[firstId, 'PA1']])}
+      candidateNodeId={null}
+      activeNodeId={null}
+      liveTurns={[liveTurn(1, 'first token')]}
+      loading={false}
+      error={null}
+      loadImage={unavailableImage}
+    />)
+
+    const scroller = view.container.querySelector('.dsh-git-chat-history') as HTMLElement
+    const observer = TestResizeObserver.instances.at(-1)
+    expect(observer?.targets).toContain(view.container.querySelector('.dsh-git-preview-column'))
+    measure(scroller, 800)
+    observer?.notify()
+    expect(scroller.scrollTop).toBe(800)
+  })
+})

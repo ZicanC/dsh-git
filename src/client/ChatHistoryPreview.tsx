@@ -509,6 +509,7 @@ export function ChatHistoryPreview({
   const locale = useLocale()
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const columnRef = useRef<HTMLDivElement | null>(null)
+  const observerRef = useRef<ResizeObserver | null>(null)
   const atBottomRef = useRef(true)
   const [atBottom, setAtBottom] = useState(true)
 
@@ -519,22 +520,25 @@ export function ChatHistoryPreview({
   const stableLoadImage = useCallback<ChatHistoryPreviewProps['loadImage']>(
     (sourceSessionId, attachment) => loadImageRef.current(sourceSessionId, attachment), [])
 
-  const scrollToBottom = () => {
+  const scrollToBottom = useCallback(() => {
     const element = scrollRef.current
     if (element === null) return
     element.scrollTop = element.scrollHeight
     atBottomRef.current = true
     setAtBottom(true)
-  }
-
-  useLayoutEffect(() => {
-    if (response !== null && atBottomRef.current) scrollToBottom()
-  }, [response])
+  }, [])
 
   // Streaming grows the flow token by token, well below the render cadence a
-  // response-keyed effect can see. Follow the measured column instead, and
-  // only while the reader is still pinned to the floor.
-  useEffect(() => {
+  // prop-keyed effect can see. Follow the measured column instead, and only
+  // while the reader is still pinned to the floor.
+  //
+  // Attached from the ref callbacks, not from a mount effect: the panel starts
+  // on the loading or empty-selection status view, so the scroller and column
+  // only enter the tree once there is something to render — an effect that ran
+  // once at mount would observe nothing and never re-run.
+  const observe = useCallback(() => {
+    observerRef.current?.disconnect()
+    observerRef.current = null
     const column = columnRef.current
     const element = scrollRef.current
     if (column === null || element === null || typeof ResizeObserver === 'undefined') return
@@ -542,10 +546,36 @@ export function ChatHistoryPreview({
       if (atBottomRef.current) element.scrollTop = element.scrollHeight
     })
     observer.observe(column)
-    return () => { observer.disconnect() }
+    observer.observe(element)
+    observerRef.current = observer
+  }, [])
+  const attachScroller = useCallback((node: HTMLDivElement | null) => {
+    scrollRef.current = node
+    observe()
+  }, [observe])
+  const attachColumn = useCallback((node: HTMLDivElement | null) => {
+    columnRef.current = node
+    observe()
+  }, [observe])
+  useEffect(() => () => {
+    observerRef.current?.disconnect()
+    observerRef.current = null
   }, [])
 
   const live = liveTurns ?? []
+  // A live turn the official Chat just opened is content the reader submitted
+  // themselves: land on it, even if they had scrolled up to read history. Keyed
+  // on the tail turn alone, so the rest of its stream never yanks the viewport
+  // back once they scroll away.
+  const liveTailKey = live.length === 0 ? null : live[live.length - 1]?.key ?? null
+  useLayoutEffect(() => {
+    if (liveTailKey !== null) scrollToBottom()
+  }, [liveTailKey, scrollToBottom])
+
+  useLayoutEffect(() => {
+    if (response !== null && atBottomRef.current) scrollToBottom()
+  }, [response, scrollToBottom])
+
   if (loading && response === null && live.length === 0) {
     return <div className="dsh-git-chat-status" role="status">{localized('正在读取完整 Chat History…', 'Loading complete Chat History…', locale)}</div>
   }
@@ -559,7 +589,7 @@ export function ChatHistoryPreview({
   return <div
     className="dsh-git-chat-history"
     aria-busy={loading || undefined}
-    ref={scrollRef}
+    ref={attachScroller}
     onScroll={(event) => {
       const element = event.currentTarget
       const next = element.scrollHeight - element.scrollTop - element.clientHeight <= 25
@@ -567,7 +597,7 @@ export function ChatHistoryPreview({
       setAtBottom(next)
     }}
   >
-    <div className="dsh-git-preview-column" ref={columnRef}>
+    <div className="dsh-git-preview-column" ref={attachColumn}>
       {(response?.turns ?? []).map((turn, index) => {
         const nodeId = orderedNodeIds[index]
         const candidate = nodeId !== undefined && nodeId === candidateNodeId
