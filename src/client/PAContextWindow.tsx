@@ -29,8 +29,8 @@ export function PAContextWindow({
   return <section id="dsh-git-pa-context-window" className="dsh-git-context-window" aria-label="PA Context Window">
     <header className="dsh-git-heading">
       <span className="dsh-git-heading-title">
-        <span>{label} Context</span>
-        <code className="dsh-git-heading-hash">{nodeHash(node.id)}</code>
+        <span className="dsh-git-heading-label">{label} Context</span>
+        <code className="dsh-git-heading-hash" title={node.id}>{nodeHash(node.id)}</code>
       </span>
       <span className="dsh-git-heading-actions">
         <button

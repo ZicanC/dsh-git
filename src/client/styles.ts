@@ -37,7 +37,8 @@ export const STYLES = `
 .dsh-git-empty{padding:32px;color:var(--dsw-alias-label-tertiary);text-align:center}
 .dsh-git-inspector{min-height:0;padding:16px;display:flex;flex-direction:column;gap:16px;overflow-y:scroll;overflow-x:hidden;scrollbar-gutter:stable;box-sizing:border-box}
 .dsh-git-inspector h3{margin:0;font:var(--dsw-font-s-strong-14)}
-.dsh-git-heading-hash{flex:none;padding:2px 6px;border-radius:5px;background:var(--dsw-specific-selector);color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xs-13);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap}
+.dsh-git-heading-label{flex:none;white-space:nowrap}
+.dsh-git-heading-hash{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;padding:2px 6px;border-radius:5px;background:var(--dsw-specific-selector);color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xs-13);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap}
 .dsh-git-heading-actions{flex:none;display:flex;align-items:center;gap:6px}
 .dsh-git-close{border:0;background:transparent;color:var(--dsw-alias-label-tertiary);font-size:22px;line-height:1;cursor:pointer;padding:0 3px}
 .dsh-git-close:hover{color:var(--dsw-alias-label-primary)}
