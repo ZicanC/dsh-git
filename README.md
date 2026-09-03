@@ -2,7 +2,9 @@
 
 **English** · [中文](./README.zh-CN.md)
 
-`dsh-git` lets you manage conversations with an agent the way you use Git.
+`dsh-git` lets you manage conversations with an agent the way you use Git, putting context selection back under human control.
+
+In long-running conversations, incorrect conclusions, outdated assumptions, failed approaches, and irrelevant tool output can continue propagating into later turns. This project lets people explicitly select the trustworthy, relevant turns that should form the next conversation history instead of inheriting an entire polluted thread by default.
 
 Each completed Prompt + Answer turn is a commit. You can cherry-pick turns from any branch, arrange them in any order to form a new conversation history, and continue asking questions from there. The assembled turns are written as real, completed DSH history—not appended to the prompt as a context block. To the agent, the resulting history is indistinguishable from one it experienced firsthand.
 
@@ -23,11 +25,13 @@ Each completed Prompt + Answer turn is a commit. You can cherry-pick turns from 
 
 ## Key features
 
-- **Per-Session conversation graph:** Each Session has a compact **Conversation Graph**. A fork created through the official Harness feature shares its inherited history prefix. The copied tip appears as a `PA<n> fork` branch marker, and subsequent PAs continue beneath it. A node's Prompt, Answer, and historical context appear only after you select that PA.
+These features let people inspect the content and provenance of information before explicitly deciding which history may enter the next conversation.
+
+- **Per-Session conversation graph:** Each Session has a compact **Conversation Graph**. A fork created through the official Harness feature shares its inherited history prefix. The copied tip appears as a `PA<n> fork` branch marker, and subsequent PAs continue beneath it. A node's Prompt, Answer, and historical context appear only after you select that PA, so you can inspect its content and source before including it.
 - **Workspace project graph:** Click the graph button beside a Workspace row to view every completed PA in that Workspace. Repeated fork history is collapsed into a `PA<n> fork` branch marker without consuming a new PA number. The project graph takes over the main column without changing the current Session.
 - **PA timeline:** The project graph opens at the complete history. Drag the timeline to step backward through completed PAs; the first new PA produced by each Session is marked on the rail.
-- **Ordered Context Tray:** New selections are arranged by creation time by default, and you can drag them into a custom order. That explicit order remains intact when you add more nodes.
-- **Cross-branch selection:** Select PAs freely across branches. If a selected node is missing its direct predecessor, the plugin warns you but does not add the missing node automatically.
+- **Ordered Context Tray:** Only explicitly selected nodes enter the new history. New selections are arranged by creation time by default, and you can drag them into a custom order. That explicit order remains intact when you add more nodes.
+- **Cross-branch selection:** Select PAs freely across branches. If a selected node is missing its direct predecessor, the plugin warns you to check whether the context is complete, but does not make that decision by adding the missing node automatically.
 - **Host-side persistence:** Each Workspace folder has an independent graph ledger containing branch names, canonical node references, context manifests, preview state, and pending merge metadata. Sessions outside every folder each use an isolated ledger. Graph data follows the DSH profile and does not depend on the current browser.
 
 ## Install
@@ -57,6 +61,8 @@ pnpm --dir ../deepseek-harness dsh plugin --profile web remove dsh-git
 Development dependencies currently link to a sibling `../deepseek-harness` source checkout because the public rc.1 dependency graph references an unpublished package. The built plugin does not contain that local path: its browser bundle is self-contained except for React, which DSH supplies through its client module table. The built `lib/` files ship with the package, so installing a release archive does not require a build step.
 
 ## Workflow
+
+When the current Session has accumulated incorrect assumptions, failed approaches, or irrelevant material, you do not need to keep inheriting its complete history. Select the PAs that remain trustworthy and relevant, arrange them as needed, and use them to create a new conversation branch.
 
 1. Complete one or more ordinary turns in DSH.
 2. Open the **Branches** tab. The current primary line is solid, and the active node is marked `HEAD`.
@@ -156,6 +162,7 @@ The configuration output must end with a `# == dsh-git` layer. The browser must 
 
 ## Known limitations
 
+- `dsh-git` does not automatically decide whether a piece of history is correct, trustworthy, or useful. It provides context visualization, provenance, selection, and composition; the final judgment remains with the user.
 - Graph data is persisted with the DSH profile. Ledgers saved by the previous `localStorage` version are not migrated. When an affected Session is viewed, its graph is re-imported from the Session log, but branch names and old merge parents stored only in the browser are lost.
 - The ledger does not push changes across tabs. Two tabs open on the same scope each hold an in-memory copy, and the last write wins; `domain/changed` broadcasts only within the Host process.
 - Project graph PA data is reloaded from the Host on every request. Merge Sessions created by the current version store provenance in their logs; older merge Sessions still depend on the ledger for exact multi-parent metadata. If the ledger is missing, the project graph shows only the provable primary lineage rather than guessing missing merge parents.

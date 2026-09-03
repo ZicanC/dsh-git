@@ -2,7 +2,7 @@ import { primaryPath } from './graph.ts'
 import type { GraphTransport } from './graph-transport.ts'
 import { EMPTY_GRAPH_STATE } from './types.ts'
 import type {
-  BranchId, GraphState, ImportedTurn, PrepareMergedSessionInput, TurnNode, TurnNodeId,
+  AnchorModeState, BranchId, GraphState, ImportedTurn, PrepareMergedSessionInput, TurnNode, TurnNodeId,
 } from './types.ts'
 
 const EMPTY_STATE = EMPTY_GRAPH_STATE
@@ -264,6 +264,8 @@ export class GraphRepository {
         turn: tip.turn,
         createdAt: markerCreatedAt,
         branchId,
+        primaryParentId: null,
+        parentIds: [],
         forkSourceId: tip.sourceId,
       }
       const refs: Record<number, TurnNodeId> = {}
@@ -324,10 +326,37 @@ export class GraphRepository {
     for (const [index, nodeId] of distinct(input.importedNodeIds).entries()) {
       if (this.state.nodes[nodeId] !== undefined) inherited[index + 1] = nodeId
     }
-    const inheritedHeadId = Object.values(inherited).at(-1) ?? input.primaryParentId
     const branchId = id('branch') as BranchId
+    const sourceParentIds = distinct(input.parentIds)
+    let nodes = this.state.nodes
+    let inheritedHeadId = Object.values(inherited).at(-1) ?? input.primaryParentId
+    let pendingParentIds = sourceParentIds
+    let pendingPrimaryParentId = input.primaryParentId
+    const inheritedTurn = Object.keys(inherited).map(Number).at(-1)
+    const forkSourceId = sourceParentIds.length === 1 ? sourceParentIds[0] : undefined
+    const forkSource = forkSourceId === undefined ? undefined : this.state.nodes[forkSourceId]
+    if (forkSource !== undefined && inheritedTurn !== undefined) {
+      const markerId = officialForkNodeId(input.childSessionId, inheritedTurn)
+      const marker: TurnNode = {
+        ...forkSource,
+        id: markerId,
+        sessionId: input.childSessionId,
+        turn: inheritedTurn,
+        createdAt: forkSource.createdAt + 0.001,
+        branchId,
+        primaryParentId: null,
+        parentIds: [],
+        forkSourceId,
+      }
+      nodes = { ...nodes, [markerId]: marker }
+      inherited[inheritedTurn] = markerId
+      inheritedHeadId = markerId
+      pendingParentIds = [markerId]
+      pendingPrimaryParentId = markerId
+    }
     this.commit({
       ...this.state,
+      nodes,
       branches: {
         ...this.state.branches,
         [branchId]: {
@@ -345,8 +374,8 @@ export class GraphRepository {
         ...this.state.pendingMerges,
         [input.childSessionId]: {
           branchId,
-          parentIds: distinct(input.parentIds),
-          primaryParentId: input.primaryParentId,
+          parentIds: pendingParentIds,
+          primaryParentId: pendingPrimaryParentId,
           contextManifest: [...input.contextManifest],
         },
       },
@@ -361,6 +390,30 @@ export class GraphRepository {
       const pendingMerges = { ...this.state.pendingMerges }
       delete pendingMerges[sessionId]
       this.commit({ ...this.state, pendingMerges })
+    })
+  }
+
+  /** Freeze one source Session's selected context into an Anchor Workspace. */
+  activateAnchor(sessionId: string, anchor: AnchorModeState): void {
+    this.run(() => {
+      const nodeIds = distinct(anchor.nodeIds)
+      if (anchor.sourceSessionId !== sessionId
+        || nodeIds.length === 0
+        || nodeIds.some(nodeId => this.state.nodes[nodeId] === undefined)) return
+      this.commit({
+        ...this.state,
+        anchors: { ...this.state.anchors, [sessionId]: { ...anchor, nodeIds } },
+      })
+    })
+  }
+
+  /** Leave anchor mode after the Host has cleaned up any unused Workspace. */
+  cancelAnchor(sessionId: string): void {
+    this.run(() => {
+      if (this.state.anchors[sessionId] === undefined) return
+      const anchors = { ...this.state.anchors }
+      delete anchors[sessionId]
+      this.commit({ ...this.state, anchors })
     })
   }
 

@@ -5,6 +5,7 @@ import type {
 } from '@deepseek-ai/dsh-client-runtime/client'
 import type { ProjectConnection } from '../connection-contract.ts'
 import type { GraphRepository } from './repository.ts'
+import { restoreAnchorSourceLabels } from './project-graph.ts'
 import { ProjectGraphPage } from './ProjectGraphPage.tsx'
 import { localized } from './i18n.ts'
 import type { LocaleSource } from './i18n.ts'
@@ -22,6 +23,7 @@ export interface ProjectBridgeServices {
   readonly sessions: ISessions
   readonly workspaces: IWorkspaces
   readonly repositoryForWorkspace: (workspaceId: string) => GraphRepository
+  readonly repositoryForSession: (sessionId: string) => GraphRepository
   readonly locale: LocaleSource
 }
 
@@ -86,7 +88,17 @@ export function installProjectBridge(services: ProjectBridgeServices): () => voi
       if (!result.ok) throw new Error(result.error.message)
       const response = decodeProjectGraphResponse(result.value)
       if (response.workspaceId !== workspace.workspaceId) throw new Error(localized('Host 返回了错误的 Workspace graph。', 'The Host returned a graph for the wrong Workspace.'))
-      return response
+      const sourceIds = new Set(response.sessions.flatMap(item =>
+        item.mergeSources?.flatMap(source => source.sourceLabel === undefined
+          ? [source.sourceSessionId]
+          : []) ?? []))
+      const sourceStates = new Map<string, ReturnType<GraphRepository['getSnapshot']>>()
+      for (const sourceSessionId of sourceIds) {
+        const sourceRepository = services.repositoryForSession(sourceSessionId)
+        await sourceRepository.hydrate()
+        sourceStates.set(sourceSessionId, sourceRepository.getSnapshot())
+      }
+      return restoreAnchorSourceLabels(response, sourceStates)
     }
     root.render(<ProjectGraphPage
       workspaceId={workspace.workspaceId}

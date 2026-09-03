@@ -7,6 +7,8 @@ export interface ContextTrayProps {
     readonly orderedIds: readonly TurnNodeId[];
     readonly candidateId: TurnNodeId | null;
     readonly busy: boolean;
+    readonly anchored?: boolean;
+    readonly anchorWorkspaceTitle?: string | undefined;
     readonly error: string | null;
     readonly dirty: boolean;
     readonly draftHasContent: boolean;
@@ -21,4 +23,4 @@ export interface ContextTrayProps {
     readonly onSendRefused: () => void;
 }
 /** Draggable ordered PA selection. The resident DSH composer remains below it. */
-export declare function ContextTray({ state, selectedIds, orderedIds, candidateId, busy, error, dirty, overLimit, onMove, onMoveEnd, onRemove, onMerge, }: ContextTrayProps): import("react").JSX.Element | null;
+export declare function ContextTray({ state, selectedIds, orderedIds, candidateId, busy, anchored, anchorWorkspaceTitle, error, dirty, overLimit, onMove, onMoveEnd, onRemove, onMerge, }: ContextTrayProps): import("react").JSX.Element | null;

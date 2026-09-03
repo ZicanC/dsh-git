@@ -23,6 +23,8 @@ export interface MergeLineageSource {
   readonly sourceBoundarySeq: number
   /** Turn number this source occupies in the merged Session. */
   readonly targetTurn: number
+  /** Original visible PA number retained by Anchor mode. */
+  readonly sourceLabel?: string
 }
 
 /**
@@ -57,6 +59,7 @@ export function mergeLineageEvent(
       sourceTurn: source.sourceTurn,
       sourceBoundarySeq: source.sourceBoundarySeq,
       targetTurn: index + 1,
+      ...(source.sourceLabel === undefined ? {} : { sourceLabel: source.sourceLabel }),
     })),
   }
   return { type: MERGE_LINEAGE_EVENT, seq, time, data: lineage, ignorable: true }

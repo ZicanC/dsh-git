@@ -85,10 +85,27 @@ describe('GraphCanvas selection presentation', () => {
     expect(button.getAttribute('aria-pressed')).toBe('true')
   })
 
+  it('marks only frozen included nodes as anchored', () => {
+    render(<GraphCanvas
+      state={state}
+      previewNodeId={null}
+      onPreview={vi.fn()}
+      selectedNodeIds={[one.id, two.id]}
+      candidateNodeId={null}
+      anchoredNodeIds={[one.id, two.id]}
+      disabled
+    />)
+
+    expect(screen.getByRole('button', { name: '查看 PA1 context' }).dataset.anchorState).toBe('anchored')
+    expect(screen.getByRole('button', { name: '查看 PA2 context' }).dataset.anchorState).toBe('anchored')
+    expect(screen.getByRole('button', { name: '查看 PA3 context' }).dataset.anchorState).toBeUndefined()
+    expect(STYLES).toContain('[data-anchor-state="anchored"]{border-inline-start:2px dashed')
+  })
+
   it('binds every workbench selection state to an explicit gray, blue, or green rule', () => {
     expect(STYLES).toContain('.dsh-git-tree-node[data-selection-state="unselected"]{border-inline-start:2px solid var(--dsh-git-state-excluded)')
     expect(STYLES).toContain('.dsh-git-tree-node[data-selection-state="selected"]{border-inline-start:2px solid var(--dsh-git-state-included)')
     expect(STYLES).toContain('.dsh-git-tree-node[data-selection-state="candidate"]{border-inline-start:2px dashed var(--dsh-git-state-preview)')
-    expect(STYLES).toContain('.dsh-git-tree-node:not([data-selection-state])[style*="--dsh-git-node-color"]{border-inline-start:4px solid var(--dsh-git-node-color)}')
+    expect(STYLES).not.toContain('--dsh-git-node-color')
   })
 })

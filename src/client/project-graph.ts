@@ -1,7 +1,14 @@
 /** Pure assembly of a complete Workspace history into one read-only PA DAG. */
 import { primaryPath } from './graph.ts'
+import { nodeLabelMap } from './labels.ts'
 import type { ConversationBranch, GraphState, TurnNode, TurnNodeId } from './types.ts'
-import type { ProjectGraphResponse, ProjectSessionDTO, ProjectTurnDTO } from '../protocol.ts'
+import {
+  isAnchoredSessionId,
+  type ProjectGraphResponse,
+  type ProjectSessionDTO,
+  type ProjectTurnDTO,
+} from '../protocol.ts'
+import type { MergeLineageSource } from '../merge-lineage.ts'
 
 /** Project-only metadata layered over the shared graph node renderer. */
 export interface ProjectPANode extends TurnNode {
@@ -18,6 +25,33 @@ export interface ProjectGraphModel {
   readonly nodes: Readonly<Record<TurnNodeId, ProjectPANode>>
   readonly timeline: readonly TurnNodeId[]
   readonly sessionCount: number
+}
+
+/** Restore labels for Anchor Sessions created before sourceLabel entered the durable lineage. */
+export function restoreAnchorSourceLabels(
+  response: ProjectGraphResponse,
+  sourceStates: ReadonlyMap<string, GraphState>,
+): ProjectGraphResponse {
+  return {
+    ...response,
+    sessions: response.sessions.map(session => {
+      if (!isAnchoredSessionId(session.sessionId) || session.mergeSources === undefined) return session
+      return {
+        ...session,
+        mergeSources: session.mergeSources.map(source => {
+          if (source.sourceLabel !== undefined) return source
+          const state = sourceStates.get(source.sourceSessionId)
+          const nodeId = state?.sessionTurnRefs[source.sourceSessionId]?.[source.sourceTurn]
+          const node = nodeId === undefined ? undefined : state?.nodes[nodeId]
+          if (state === undefined || nodeId === undefined || node?.boundarySeq !== source.sourceBoundarySeq) {
+            return source
+          }
+          const sourceLabel = nodeLabelMap(state).get(nodeId)
+          return sourceLabel === undefined ? source : { ...source, sourceLabel }
+        }),
+      }
+    }),
+  }
 }
 
 interface TurnAddress {
@@ -92,6 +126,11 @@ function forkNodeId(sessionId: string, turn: number): TurnNodeId {
   return `project-fork:${encodeURIComponent(sessionId)}:${turn}`
 }
 
+/** Stable identity for an anchored source PA whose Session lives outside this Workspace. */
+function externalAnchorNodeId(source: MergeLineageSource): TurnNodeId {
+  return `project-anchor-source:${encodeURIComponent(source.sourceSessionId)}:${source.sourceTurn}:${source.sourceBoundarySeq}`
+}
+
 function exactFingerprintCandidates(
   addresses: readonly TurnAddress[],
   local: GraphState,
@@ -125,6 +164,9 @@ export function assembleProjectGraph(
   const canonical = new Map<string, TurnNodeId>()
   const addressKey = (sessionId: string, turn: number): string => `${sessionId}\u0000${turn}`
   const sessionsById = new Map(sessions.map(session => [session.sessionId, session]))
+  const anchorSessionOrdinals = new Map(sessions
+    .filter(session => isAnchoredSessionId(session.sessionId))
+    .map((session, index) => [session.sessionId, index + 1]))
   const resolving = new Set<string>()
   const ordinaryForkTips = new Map<string, number>()
 
@@ -160,6 +202,11 @@ export function assembleProjectGraph(
         resolving.delete(key)
         canonical.set(key, sourceId)
         return sourceId
+      }
+      if (sourceSession === undefined && isAnchoredSessionId(session.sessionId)) {
+        const id = externalAnchorNodeId(mergeSource)
+        canonical.set(key, id)
+        return id
       }
     }
 
@@ -223,65 +270,145 @@ export function assembleProjectGraph(
     const refs: Record<number, TurnNodeId> = {}
     let previousId: TurnNodeId | null = null
     let firstOwn = true
-    const exactMergeParents = session.mergeSources === undefined
-      ? []
-      : [...new Set([...session.mergeSources]
-          .sort((left, right) => left.targetTurn - right.targetTurn)
-          .flatMap(source => canonical.get(addressKey(sid, source.targetTurn)) ?? []))]
+    let ownTurnIndex = 0
+    const anchorSessionOrdinal = anchorSessionOrdinals.get(sid)
+    const orderedMergeSources = [...(session.mergeSources ?? [])]
+      .sort((left, right) => left.targetTurn - right.targetTurn)
+    const exactMergeContextIds = [...new Set(orderedMergeSources.flatMap((source) => {
+      const id = canonical.get(addressKey(sid, source.targetTurn))
+      return id === undefined ? [] : [id]
+    }))]
+    const terminalMergeSourceBySession = new Map<string, MergeLineageSource>()
+    for (const source of orderedMergeSources) {
+      terminalMergeSourceBySession.set(source.sourceSessionId, source)
+    }
+    const exactMergeParents = [...new Set([...terminalMergeSourceBySession.values()]
+      .sort((left, right) => left.targetTurn - right.targetTurn)
+      .flatMap((source) => {
+        const id = canonical.get(addressKey(sid, source.targetTurn))
+        return id === undefined ? [] : [id]
+      }))]
+    const singleSource = terminalMergeSourceBySession.size === 1
+      ? terminalMergeSourceBySession.values().next().value as MergeLineageSource | undefined
+      : undefined
+    const singleSourceId = singleSource === undefined
+      ? undefined
+      : canonical.get(addressKey(sid, singleSource.targetTurn))
+    const singleSourceSession = singleSource === undefined
+      ? undefined
+      : sessionsById.get(singleSource.sourceSessionId)
+    const singleSourceTurn = singleSourceSession?.turns.find(turn => singleSource !== undefined
+      && turn.turn === singleSource.sourceTurn
+      && turn.boundarySeq === singleSource.sourceBoundarySeq)
+    const localForkMarkerId = singleSource === undefined
+      ? undefined
+      : local.sessionTurnRefs[sid]?.[singleSource.targetTurn]
+    const localForkMarker = localForkMarkerId === undefined ? undefined : local.nodes[localForkMarkerId]
+    const reusableForkMarkerId = localForkMarker !== undefined
+      && localForkMarker.sessionId === sid
+      && localForkMarker.turn === singleSource?.targetTurn
+      && localForkMarker.forkSourceId === singleSourceId
+      && localForkMarker.primaryParentId === null
+      && localForkMarker.parentIds.length === 0
+      ? localForkMarker.id
+      : undefined
+    // The old composed-session path recorded every selected PA as a merge
+    // source, even when all of them came from one Session. Exact Host
+    // provenance lets the read-only Workspace projection repair that legacy
+    // shape safely: the terminal source becomes one explicit fork occurrence,
+    // while every selected PA remains in the first own turn's Context.
+    const composedFork = session.mergeSources !== undefined
+      && sid.startsWith('dsh-git-')
+      && !isAnchoredSessionId(sid)
+      && session.turns.some(turn => !turn.inherited)
+      && singleSource !== undefined
+      && singleSourceId !== undefined
+      && singleSourceTurn !== undefined
+      && exactMergeParents.length === 1
+      ? {
+          markerId: reusableForkMarkerId ?? forkNodeId(sid, singleSource.targetTurn),
+          sourceId: singleSourceId,
+          targetTurn: singleSource.targetTurn,
+        }
+      : undefined
+    const relationParentIds = composedFork === undefined
+      ? exactMergeParents
+      : [composedFork.markerId]
     for (const turn of [...session.turns].sort((left, right) => left.turn - right.turn)) {
-      const id = canonical.get(addressKey(sid, turn.turn))!
+      if (!turn.inherited) ownTurnIndex += 1
+      const isComposedForkMarker = turn.inherited && turn.turn === composedFork?.targetTurn
+      const id = isComposedForkMarker
+        ? composedFork.markerId
+        : canonical.get(addressKey(sid, turn.turn))!
       refs[turn.turn] = id
       const localNode = local.nodes[id]
       const existing = nodes[id]
       if (existing === undefined) {
-        const isForkMarker = id === forkNodeId(sid, turn.turn)
+        const mergeSource = session.mergeSources?.find(source => source.targetTurn === turn.turn)
+        const externalAnchorSource = mergeSource !== undefined
+          && !sessionsById.has(mergeSource.sourceSessionId)
+          && isAnchoredSessionId(sid)
+          && id === externalAnchorNodeId(mergeSource)
+          ? mergeSource
+          : undefined
+        const nodeSessionId = externalAnchorSource?.sourceSessionId ?? localNode?.sessionId ?? sid
+        const displayLabel = externalAnchorSource?.sourceLabel
+          ?? (anchorSessionOrdinal === undefined || turn.inherited
+            ? localNode?.displayLabel
+            : `S${anchorSessionOrdinal}.${ownTurnIndex}`)
+        const isForkMarker = isComposedForkMarker || id === forkNodeId(sid, turn.turn)
         const parentSession = session.parentSessionId === undefined ? undefined : sessionsById.get(session.parentSessionId)
         const parentTurn = isForkMarker
           ? parentSession?.turns.find(candidate => candidate.turn === turn.turn && candidate.fingerprint === turn.fingerprint)
           : undefined
-        const forkSourceId = parentSession !== undefined && parentTurn !== undefined
-          ? canonical.get(addressKey(parentSession.sessionId, parentTurn.turn))
-          : undefined
+        const forkSourceId = isComposedForkMarker
+          ? composedFork.sourceId
+          : parentSession !== undefined && parentTurn !== undefined
+            ? canonical.get(addressKey(parentSession.sessionId, parentTurn.turn))
+            : undefined
         const forkSource = forkSourceId === undefined ? undefined : nodes[forkSourceId]
         // A viewed official fork may already have browser-ledger nodes for its
         // copied prefix. Their relations point at those duplicate ids, so use
         // the proven Host lineage for the entire ordinary-fork branch.
         const useLocalRelations = localNode !== undefined && !isForkMarker && !ordinaryForkTips.has(sid)
         const isFirstMergedOwnTurn = session.mergeSources !== undefined
-          && !turn.inherited && firstOwn && exactMergeParents.length > 0
+          && !turn.inherited && firstOwn && relationParentIds.length > 0
         if (isFirstMergedOwnTurn) exactMergeRelationIds.add(id)
         const primaryParentId = isForkMarker
-          ? forkSource?.primaryParentId ?? null
+          ? null
           : isFirstMergedOwnTurn
-            ? exactMergeParents.at(-1) ?? null
+            ? relationParentIds.at(-1) ?? null
             : useLocalRelations ? localNode.primaryParentId : previousId
         const parentIds = isForkMarker
-          ? primaryParentId === null ? [] : [primaryParentId]
+          ? []
           : isFirstMergedOwnTurn
-            ? exactMergeParents
+            ? relationParentIds
             : useLocalRelations
               ? localNode.parentIds.filter(parentId => local.nodes[parentId] !== undefined)
               : previousId === null ? [] : [previousId]
         nodes[id] = {
           id,
-          sessionId: localNode?.sessionId ?? sid,
-          turn: localNode?.turn ?? turn.turn,
+          ...(displayLabel === undefined ? {} : { displayLabel }),
+          sessionId: nodeSessionId,
+          turn: externalAnchorSource?.sourceTurn ?? localNode?.turn ?? turn.turn,
           prompt: localNode?.prompt ?? turn.prompt,
           answer: localNode?.answer ?? turn.answer,
-          createdAt: isForkMarker ? session.createdAt : localNode?.createdAt ?? turn.startedAt,
+          createdAt: isForkMarker
+            ? localNode?.createdAt ?? session.createdAt
+            : localNode?.createdAt ?? turn.startedAt,
           completedAt: turn.completedAt,
           sessionCreatedAt: session.createdAt,
-          sessionTitle: titleOf(localNode?.sessionId ?? sid, titles),
+          sessionTitle: titleOf(nodeSessionId, titles),
           firstInSession: !turn.inherited && firstOwn,
           fingerprint: turn.fingerprint,
           ...(forkSourceId === undefined ? {} : { forkSourceId }),
-          boundarySeq: localNode?.boundarySeq ?? turn.boundarySeq,
+          boundarySeq: externalAnchorSource?.sourceBoundarySeq ?? localNode?.boundarySeq ?? turn.boundarySeq,
           primaryParentId,
           parentIds,
           contextManifest: isForkMarker
             ? forkSource?.contextManifest ?? (primaryParentId === null ? [] : [primaryParentId])
             : isFirstMergedOwnTurn
-              ? exactMergeParents
+              ? exactMergeContextIds
               : localNode?.contextManifest ?? (primaryParentId === null ? [] : [primaryParentId]),
           branchId: localNode?.branchId ?? bid,
         }
@@ -310,6 +437,7 @@ export function assembleProjectGraph(
     sessionBranches,
     sessionTurnRefs,
     pendingMerges: {},
+    anchors: {},
     headNodeId: null,
     previewNodeId: null,
     contextManifest: [],

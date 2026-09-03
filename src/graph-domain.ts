@@ -24,6 +24,7 @@ const nodeId = z.string().min(1)
 
 const turnNodeSchema = z.object({
   id: nodeId,
+  displayLabel: z.string().regex(/^(PA[1-9]\d*(?: fork)?|S[1-9]\d*\.[1-9]\d*)$/).optional(),
   sessionId: z.string().min(1),
   turn: z.number().int().nonnegative(),
   prompt: z.string(),
@@ -55,6 +56,15 @@ const pendingMergeSchema = z.object({
   prompt: z.string().optional(),
 })
 
+const anchorModeSchema = z.object({
+  sourceSessionId: z.string().min(1),
+  nodeIds: z.array(nodeId).min(1),
+  workspaceId: z.string().min(1),
+  workspacePath: z.string().min(1),
+  workspaceTitle: z.string().min(1),
+  createdAt: z.number(),
+})
+
 /** One scope's complete ledger, as stored and as accepted off the wire. */
 export const graphStateSchema: z.ZodType<GraphState> = z.object({
   format: z.literal(1),
@@ -64,6 +74,8 @@ export const graphStateSchema: z.ZodType<GraphState> = z.object({
   // JSON object keys are strings; the turn number is recovered by the reader.
   sessionTurnRefs: z.record(z.string(), z.record(z.string(), nodeId)),
   pendingMerges: z.record(z.string(), pendingMergeSchema),
+  // Optional on disk so ledgers written before anchor mode still load.
+  anchors: z.record(z.string(), anchorModeSchema).default({}),
   headNodeId: nodeId.nullable(),
   previewNodeId: nodeId.nullable(),
   contextManifest: z.array(nodeId),

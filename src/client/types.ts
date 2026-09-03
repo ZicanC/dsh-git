@@ -1,5 +1,5 @@
 export type {
-  BranchId, ConversationBranch, GraphState, PendingMerge, TurnNode, TurnNodeId,
+  AnchorModeState, BranchId, ConversationBranch, GraphState, PendingMerge, TurnNode, TurnNodeId,
 } from '../graph-state.ts'
 export { EMPTY_GRAPH_STATE } from '../graph-state.ts'
 

@@ -4,6 +4,11 @@ export interface HistoryTurnSource {
     readonly sourceSessionId: string;
     readonly sourceTurn: number;
     readonly sourceBoundarySeq: number;
+    /** Present only for Anchor mode, where the source Workspace PA number must survive. */
+    readonly sourceLabel?: string;
+}
+export interface AnchoredHistoryTurnSource extends HistoryTurnSource {
+    readonly sourceLabel: string;
 }
 /** Trusted browser-to-Host request used to create a merged session. */
 export interface CreateMergedSessionRequest {
@@ -14,11 +19,48 @@ export interface CreateMergedSessionRequest {
 export interface CreateMergedSessionResponse {
     readonly targetSessionId: string;
 }
+/** Strict-isolation request: create one independent child in an Anchor Workspace. */
+export interface CreateAnchoredSessionRequest {
+    readonly targetSessionId: string;
+    readonly workspaceId: string;
+    readonly sources: readonly AnchoredHistoryTurnSource[];
+}
+export interface CreateAnchoredSessionResponse {
+    readonly targetSessionId: string;
+}
+/** Host-scoped request for the dedicated Workspace used by Anchor mode. */
+export interface CreateAnchorWorkspaceRequest {
+    readonly sourceSessionId: string;
+    readonly title: string;
+    /** Order-insensitive source coordinates that give this Anchor Workspace a stable identity. */
+    readonly sources: readonly HistoryTurnSource[];
+}
+export interface CreateAnchorWorkspaceResponse {
+    readonly workspaceId: string;
+    readonly workspacePath: string;
+    readonly workspaceTitle: string;
+}
+/** Host-scoped request to leave Anchor mode while retaining its reusable Workspace. */
+export interface CancelAnchorWorkspaceRequest {
+    readonly sourceSessionId: string;
+    readonly workspaceId: string;
+    /** Present when the browser can upgrade a legacy marker before leaving the mode. */
+    readonly sources?: readonly HistoryTurnSource[];
+}
+export interface CancelAnchorWorkspaceResponse {
+    /** Retained for protocol compatibility; reusable Anchor Workspaces are no longer removed. */
+    readonly removed: boolean;
+}
 /** Generic Connection channel and endpoint used by the project graph reader. */
 export declare const PROJECT_GRAPH_RPC_CHANNEL = "/dsh-git";
 export declare const PROJECT_GRAPH_RPC_ENDPOINT = "workspace/graph";
 export declare const HISTORY_PREVIEW_RPC_ENDPOINT = "history/preview";
 export declare const CREATE_MERGED_SESSION_RPC_ENDPOINT = "session/create-merged";
+export declare const CREATE_ANCHORED_SESSION_RPC_ENDPOINT = "session/create-anchored";
+export declare const CREATE_ANCHOR_WORKSPACE_RPC_ENDPOINT = "workspace/create-anchor";
+export declare const CANCEL_ANCHOR_WORKSPACE_RPC_ENDPOINT = "workspace/cancel-anchor";
+export declare const ANCHORED_SESSION_PREFIX = "dsh-git-anchor-";
+export declare function isAnchoredSessionId(value: string): boolean;
 /** Practical upper bound for one merged context while retaining full-session defaults. */
 export declare const MAX_MERGED_HISTORY_TURNS = 512;
 /** Endpoints backing the Host-owned graph ledger. */
@@ -181,6 +223,15 @@ export declare function decodeHistoryPreviewResponse(value: unknown): HistoryPre
 export declare function decodeCreateMergedSessionRequest(value: unknown): CreateMergedSessionRequest;
 /** Strictly validate the Host acknowledgement received across Connection. */
 export declare function decodeCreateMergedSessionResponse(value: unknown): CreateMergedSessionResponse;
+/** Strictly validate an anchored-child creation request. */
+export declare function decodeCreateAnchoredSessionRequest(value: unknown): CreateAnchoredSessionRequest;
+export declare function decodeCreateAnchoredSessionResponse(value: unknown): CreateAnchoredSessionResponse;
+/** Validate an Anchor Workspace request without accepting a browser-supplied path. */
+export declare function decodeCreateAnchorWorkspaceRequest(value: unknown): CreateAnchorWorkspaceRequest;
+export declare function decodeCreateAnchorWorkspaceResponse(value: unknown): CreateAnchorWorkspaceResponse;
+/** Validate an Anchor cleanup request without accepting a browser-supplied path. */
+export declare function decodeCancelAnchorWorkspaceRequest(value: unknown): CancelAnchorWorkspaceRequest;
+export declare function decodeCancelAnchorWorkspaceResponse(value: unknown): CancelAnchorWorkspaceResponse;
 /** Strictly validate the untrusted project graph RPC request. */
 export declare function decodeProjectGraphRequest(value: unknown): ProjectGraphRequest;
 /** Validate the ledger-read request; the state schema is enforced by the Host domain. */

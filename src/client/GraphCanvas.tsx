@@ -1,8 +1,8 @@
 import {
   memo, useCallback, useEffect, useMemo, useRef, useState,
-  type CSSProperties, type FocusEvent as ReactFocusEvent, type PointerEvent as ReactPointerEvent,
+  type FocusEvent as ReactFocusEvent, type PointerEvent as ReactPointerEvent,
 } from 'react'
-import { orderedNodes, primaryPath } from './graph.ts'
+import { orderedNodes } from './graph.ts'
 import { nodeLabelMap } from './labels.ts'
 import { localized, useLocale } from './i18n.ts'
 import type { GraphState, TurnNodeId } from './types.ts'
@@ -13,6 +13,10 @@ const NODE_WIDTH = 132
 const NODE_HEIGHT = 42
 const HORIZONTAL_GAP = 24
 const VERTICAL_GAP = 58
+const LANE_STEP = NODE_WIDTH + HORIZONTAL_GAP
+const ROW_STEP = NODE_HEIGHT + VERTICAL_GAP
+const CONNECTOR_ELBOW = VERTICAL_GAP / 2
+const MERGE_PARALLEL_OFFSET = 8
 const STAGE_PADDING = 32
 
 // Zoom bounds for the pan/zoom stage. Below the floor the labels stop being
@@ -27,6 +31,8 @@ const FOCUS_MARGIN = 12
 
 interface TreePosition {
   readonly nodeId: TurnNodeId
+  readonly row: number
+  readonly lane: number
   readonly x: number
   readonly y: number
 }
@@ -75,86 +81,193 @@ export interface GraphCanvasProps {
   readonly selectedNodeIds?: readonly TurnNodeId[]
   /** Optional uncommitted node being previewed for addition. */
   readonly candidateNodeId?: TurnNodeId | null
+  /** Frozen included nodes while strict-isolation anchor mode is active. */
+  readonly anchoredNodeIds?: readonly TurnNodeId[] | undefined
   /** Make node inspection inert while a merge transaction is in flight. */
   readonly disabled?: boolean
   /** Optional project-level PA labels ordered by completion time. */
   readonly labels?: ReadonlyMap<TurnNodeId, string>
-  /** Optional stable color index per project Session. */
+  /** @deprecated Accepted for caller compatibility; the final graph does not color nodes by Session. */
   readonly nodeColors?: ReadonlyMap<TurnNodeId, number>
 }
 
-/** Lay out the primary-parent tree; secondary parents are drawn as merge edges. */
+/** Resolve an original PA and every fork copy to one presentation identity. */
+function identityRootId(state: GraphState, nodeId: TurnNodeId): TurnNodeId {
+  const visited = new Set<TurnNodeId>()
+  let cursor = nodeId
+  while (!visited.has(cursor)) {
+    visited.add(cursor)
+    const sourceId = state.nodes[cursor]?.forkSourceId
+    if (sourceId === undefined || state.nodes[sourceId] === undefined) return cursor
+    cursor = sourceId
+  }
+  return cursor
+}
+
+/**
+ * Lay out the visible lineage rather than a creation-order list.
+ *
+ * Ordinary siblings share the row immediately below their parent. A fork copy
+ * stays beside its source on the same row, while a merge always opens a fresh
+ * lane to the right of the lineages it joins.
+ */
 function layoutTree(state: GraphState): TreeLayout {
   const nodes = orderedNodes(state)
-  const nodeIds = new Set(nodes.map(node => node.id))
-  const children = new Map<TurnNodeId, TurnNodeId[]>()
-  const roots: TurnNodeId[] = []
+  const order = new Map(nodes.map((node, index) => [node.id, index]))
+  const rows = new Map<TurnNodeId, number>()
+  const measuringRows = new Set<TurnNodeId>()
+  const rowFor = (nodeId: TurnNodeId): number => {
+    const known = rows.get(nodeId)
+    if (known !== undefined) return known
+    if (measuringRows.has(nodeId)) return 0
+    const node = state.nodes[nodeId]
+    if (node === undefined) return 0
+    measuringRows.add(nodeId)
+    const identityRoot = identityRootId(state, node.id)
+    const forkSource = identityRoot === node.id ? undefined : state.nodes[identityRoot]
+    const row = forkSource === undefined ? (() => {
+      const parentRows = [...new Set(node.parentIds)]
+        .filter(parentId => parentId !== nodeId && state.nodes[parentId] !== undefined)
+        .map(rowFor)
+      return parentRows.length === 0 ? 0 : Math.max(...parentRows) + 1
+    })() : rowFor(forkSource.id)
+    measuringRows.delete(nodeId)
+    rows.set(nodeId, row)
+    return row
+  }
+  for (const node of nodes) rowFor(node.id)
 
+  const ordinaryChildren = new Map<TurnNodeId, TurnNodeId[]>()
   for (const node of nodes) {
-    if (node.primaryParentId === null || !nodeIds.has(node.primaryParentId)) roots.push(node.id)
-    else children.set(node.primaryParentId, [...(children.get(node.primaryParentId) ?? []), node.id])
+    const parents = [...new Set(node.parentIds)]
+    if (node.forkSourceId !== undefined || parents.length !== 1) continue
+    const parentId = parents[0]!
+    ordinaryChildren.set(parentId, [...(ordinaryChildren.get(parentId) ?? []), node.id])
   }
 
-  const widths = new Map<TurnNodeId, number>()
-  const measuring = new Set<TurnNodeId>()
-  const measure = (nodeId: TurnNodeId): number => {
-    if (widths.has(nodeId)) return widths.get(nodeId)!
-    if (measuring.has(nodeId)) return NODE_WIDTH
-    measuring.add(nodeId)
-    const childIds = children.get(nodeId) ?? []
-    const childWidth = childIds.reduce((total, childId, index) =>
-      total + measure(childId) + (index === 0 ? 0 : HORIZONTAL_GAP), 0)
-    const width = Math.max(NODE_WIDTH, childWidth)
-    widths.set(nodeId, width)
-    measuring.delete(nodeId)
-    return width
+  const forksBySource = new Map<TurnNodeId, TurnNodeId[]>()
+  for (const node of nodes) {
+    if (node.forkSourceId === undefined) continue
+    const identityRoot = identityRootId(state, node.id)
+    if (identityRoot === node.id || state.nodes[identityRoot] === undefined) continue
+    forksBySource.set(identityRoot, [...(forksBySource.get(identityRoot) ?? []), node.id])
   }
 
-  const positioned = new Set<TurnNodeId>()
-  const positions: TreePosition[] = []
-  const place = (nodeId: TurnNodeId, left: number, depth: number): void => {
-    if (positioned.has(nodeId)) return
-    positioned.add(nodeId)
-    const width = measure(nodeId)
-    positions.push({ nodeId, x: left + width / 2, y: STAGE_PADDING + depth * (NODE_HEIGHT + VERTICAL_GAP) })
-    let childLeft = left
-    for (const childId of children.get(nodeId) ?? []) {
-      place(childId, childLeft, depth + 1)
-      childLeft += measure(childId) + HORIZONTAL_GAP
+  const lanes = new Map<TurnNodeId, number>()
+  const measuringLanes = new Set<TurnNodeId>()
+  // Slot availability is row-local. A busy earlier row must not make a later
+  // sibling or merge inherit a large, visually empty global lane number.
+  const rowHasLane = (row: number, lane: number): boolean => {
+    for (const [nodeId, occupied] of lanes) {
+      if ((rows.get(nodeId) ?? 0) === row && occupied === lane) return true
     }
+    return false
   }
+  const nextFreeRowLane = (row: number, start: number): number => {
+    let lane = Math.max(0, start)
+    while (rowHasLane(row, lane)) lane += 1
+    return lane
+  }
+  // A late fork owns the slot immediately to the right of its source. Only
+  // the occupied suffix on that row moves; earlier/later rows keep their x,
+  // and their connectors are allowed to bend to the moved endpoint.
+  const openRowLane = (row: number, lane: number): void => {
+    if (!rowHasLane(row, lane)) return
+    const suffix = [...lanes]
+      .filter(([nodeId, occupied]) => (rows.get(nodeId) ?? 0) === row && occupied >= lane)
+      .sort((left, right) => right[1] - left[1])
+    for (const [nodeId, occupied] of suffix) lanes.set(nodeId, occupied + 1)
+  }
+  const laneFor = (nodeId: TurnNodeId): number => {
+    const known = lanes.get(nodeId)
+    if (known !== undefined) return known
+    if (measuringLanes.has(nodeId)) {
+      const fallback = nextFreeRowLane(rows.get(nodeId) ?? 0, 0)
+      lanes.set(nodeId, fallback)
+      return fallback
+    }
+    const node = state.nodes[nodeId]
+    if (node === undefined) return 0
+    measuringLanes.add(nodeId)
 
-  let rootLeft = STAGE_PADDING
-  for (const rootId of roots) {
-    place(rootId, rootLeft, 0)
-    rootLeft += measure(rootId) + HORIZONTAL_GAP
-  }
-  // Malformed cyclic data should remain inspectable instead of disappearing.
-  for (const node of nodes) {
-    if (positioned.has(node.id)) continue
-    place(node.id, rootLeft, 0)
-    rootLeft += measure(node.id) + HORIZONTAL_GAP
-  }
+    let lane: number
+    const identityRoot = identityRootId(state, node.id)
+    const forkSource = identityRoot === node.id ? undefined : state.nodes[identityRoot]
+    const parents = [...new Set(node.parentIds)]
+      .filter(parentId => parentId !== nodeId && state.nodes[parentId] !== undefined)
+    if (forkSource !== undefined) {
+      const sourceLane = laneFor(forkSource.id)
+      const siblings = forksBySource.get(forkSource.id) ?? []
+      const forkIndex = Math.max(0, siblings.indexOf(node.id))
+      for (const earlierForkId of siblings.slice(0, forkIndex)) laneFor(earlierForkId)
+      lane = Math.max(sourceLane, ...siblings.slice(0, forkIndex)
+        .map(forkId => lanes.get(forkId) ?? sourceLane)) + 1
+      openRowLane(rows.get(node.id) ?? 0, lane)
+    } else if (parents.length >= 2) {
+      for (const parentId of parents) laneFor(parentId)
+      const rightmostParentLane = Math.max(...parents.map(parentId => lanes.get(parentId) ?? 0))
+      lane = nextFreeRowLane(rows.get(node.id) ?? 0, rightmostParentLane + 1)
+    } else if (parents.length === 1) {
+      const parentId = parents[0]!
+      const parentLane = laneFor(parentId)
+      const siblings = ordinaryChildren.get(parentId) ?? []
+      if (siblings[0] === node.id) {
+        lane = nextFreeRowLane(rows.get(node.id) ?? 0, parentLane)
+      } else {
+        lane = nextFreeRowLane(rows.get(node.id) ?? 0, parentLane + 1)
+      }
+    } else if (node.primaryParentId !== null && state.nodes[node.primaryParentId] !== undefined) {
+      lane = laneFor(node.primaryParentId)
+    } else {
+      lane = nextFreeRowLane(rows.get(node.id) ?? 0, 0)
+    }
 
-  const maxDepthY = Math.max(STAGE_PADDING, ...positions.map(position => position.y))
+    measuringLanes.delete(nodeId)
+    const placedDuringCycle = lanes.get(nodeId)
+    if (placedDuringCycle !== undefined) return placedDuringCycle
+    lanes.set(nodeId, lane)
+    return lane
+  }
+  for (const node of nodes) laneFor(node.id)
+
+  const positions = nodes
+    .map(node => ({ node, row: rows.get(node.id) ?? 0, lane: lanes.get(node.id) ?? 0 }))
+    .sort((left, right) => left.row - right.row || left.lane - right.lane
+      || (order.get(left.node.id) ?? 0) - (order.get(right.node.id) ?? 0))
+    .map(({ node, row, lane }): TreePosition => ({
+      nodeId: node.id,
+      row,
+      lane,
+      x: STAGE_PADDING + NODE_WIDTH / 2 + lane * LANE_STEP,
+      y: STAGE_PADDING + row * ROW_STEP,
+    }))
+
+  const maxRow = Math.max(0, ...positions.map(position => position.row))
+  const maxLane = Math.max(0, ...positions.map(position => position.lane))
   return {
     positions,
-    width: Math.max(320, rootLeft - HORIZONTAL_GAP + STAGE_PADDING),
-    height: maxDepthY + NODE_HEIGHT + STAGE_PADDING,
+    width: Math.max(320, STAGE_PADDING * 2 + NODE_WIDTH + maxLane * LANE_STEP),
+    height: STAGE_PADDING * 2 + NODE_HEIGHT + maxRow * ROW_STEP,
   }
 }
 
 function connector(parent: TreePosition, child: TreePosition): string {
   const startY = parent.y + NODE_HEIGHT
   const endY = child.y
-  const middleY = startY + (endY - startY) / 2
+  const middleY = startY + CONNECTOR_ELBOW
   return `M ${parent.x} ${startY} V ${middleY} H ${child.x} V ${endY}`
+}
+
+function mergeConnector(parent: TreePosition, child: TreePosition, parallel: boolean): string {
+  const startX = parent.x + (parallel ? MERGE_PARALLEL_OFFSET : 0)
+  const startY = parent.y + NODE_HEIGHT
+  return `M ${startX} ${startY} V ${startY + CONNECTOR_ELBOW} H ${child.x} V ${child.y}`
 }
 
 /** Compact tree visualization: node details are intentionally kept out of the graph. */
 function GraphCanvasView({
-  state, previewNodeId, onPreview, selectedNodeIds, candidateNodeId, disabled = false,
-  labels: suppliedLabels, nodeColors,
+  state, previewNodeId, onPreview, selectedNodeIds, candidateNodeId, anchoredNodeIds, disabled = false,
+  labels: suppliedLabels,
 }: GraphCanvasProps) {
   const locale = useLocale()
   const viewportRef = useRef<HTMLDivElement>(null)
@@ -170,10 +283,39 @@ function GraphCanvasView({
   layoutRef.current = layout
   const automaticLabels = useMemo(() => nodeLabelMap(state), [state])
   const labels = suppliedLabels ?? automaticLabels
+  const nodes = useMemo(() => orderedNodes(state), [state])
   const byId = useMemo(() => new Map(layout.positions.map(position => [position.nodeId, position])), [layout])
-  const activePath = useMemo(() => new Set(primaryPath(state, state.headNodeId)), [state])
-  const context = new Set(state.contextManifest)
+  const previewRelated = useMemo(() => {
+    if (previewNodeId === null) return null
+    const preview = state.nodes[previewNodeId]
+    if (preview === undefined) return null
+    const identityRoots = new Set([preview.id, ...preview.contextManifest]
+      .filter(nodeId => state.nodes[nodeId] !== undefined)
+      .map(nodeId => identityRootId(state, nodeId)))
+    return new Set(nodes
+      .filter(node => identityRoots.has(identityRootId(state, node.id)))
+      .map(node => node.id))
+  }, [state, nodes, previewNodeId])
+  const forkIdentityGroups = useMemo(() => {
+    const groups = new Map<TurnNodeId, TurnNodeId[]>()
+    for (const node of nodes) {
+      const identityRoot = identityRootId(state, node.id)
+      if (node.forkSourceId === undefined && identityRoot === node.id) {
+        if (!groups.has(identityRoot)) groups.set(identityRoot, [identityRoot])
+        continue
+      }
+      const members = groups.get(identityRoot) ?? (state.nodes[identityRoot] === undefined ? [] : [identityRoot])
+      if (!members.includes(node.id)) members.push(node.id)
+      groups.set(identityRoot, members)
+    }
+    return groups
+  }, [state, nodes])
+  const parentsWithOrdinaryChildren = useMemo(() => new Set(nodes.flatMap((node) => {
+    const parents = [...new Set(node.parentIds)]
+    return node.forkSourceId === undefined && parents.length === 1 ? parents : []
+  })), [nodes])
   const selectedNodes = useMemo(() => new Set(selectedNodeIds ?? []), [selectedNodeIds])
+  const anchoredNodes = useMemo(() => new Set(anchoredNodeIds ?? []), [anchoredNodeIds])
   const selectionMode = selectedNodeIds !== undefined || candidateNodeId !== undefined
   // The empty state renders no viewport, so both listeners have to re-bind
   // when the first PA turns this into a real canvas.
@@ -327,54 +469,95 @@ function GraphCanvasView({
         }}
       >
       <svg className="dsh-git-tree-svg" width={layout.width} height={layout.height} aria-hidden="true">
-        {orderedNodes(state).flatMap(node => node.parentIds.map(parentId => {
-          const parent = byId.get(parentId)
-          const child = byId.get(node.id)
-          if (parent === undefined || child === undefined) return null
-          const merge = parentId !== node.primaryParentId
-          const active = !merge && activePath.has(parentId) && activePath.has(node.id)
-          return <path
-            key={`${parentId}:${node.id}`}
-            d={connector(parent, child)}
-            className={`dsh-git-tree-edge ${merge ? 'dsh-git-tree-edge-merge' : active ? 'dsh-git-tree-edge-active' : ''}`}
-          />
-        }))}
+        {nodes.flatMap((node) => {
+          if (node.forkSourceId !== undefined) return []
+          const parentIds = [...new Set(node.parentIds)]
+          const merge = parentIds.length >= 2
+          return parentIds.map((parentId) => {
+            const parent = byId.get(parentId)
+            const child = byId.get(node.id)
+            if (parent === undefined || child === undefined) return null
+            return <path
+              key={`${parentId}:${node.id}`}
+              d={merge
+                ? mergeConnector(parent, child, parentsWithOrdinaryChildren.has(parentId))
+                : connector(parent, child)}
+              className={`dsh-git-tree-edge ${merge ? 'dsh-git-tree-edge-merge' : ''}`}
+              data-edge-kind={merge ? 'merge' : 'lineage'}
+              data-parent-id={parentId}
+              data-child-id={node.id}
+            />
+          })
+        })}
+        {[...forkIdentityGroups].flatMap(([identityRoot, memberIds]) => {
+          const members = memberIds
+            .map(nodeId => byId.get(nodeId))
+            .filter((position): position is TreePosition => position !== undefined)
+            .sort((left, right) => left.x - right.x)
+          return members.slice(1).map((right, index) => {
+            const left = members[index]!
+            const startX = left.x + NODE_WIDTH / 2
+            const endX = right.x - NODE_WIDTH / 2
+            const middleY = left.y + NODE_HEIGHT / 2
+            const muted = previewRelated !== null && !previewRelated.has(identityRoot)
+            return <g
+              key={`fork:${left.nodeId}:${right.nodeId}`}
+              className={`dsh-git-tree-fork-arrow ${muted ? 'dsh-git-tree-fork-arrow-muted' : ''}`}
+              data-fork-source-id={identityRoot}
+              data-fork-from-id={left.nodeId}
+              data-fork-copy-id={right.nodeId}
+            >
+              <path d={`M ${startX} ${middleY} H ${endX}`} />
+              <path d={`M ${startX + 4} ${middleY - 3.5} L ${startX} ${middleY} L ${startX + 4} ${middleY + 3.5}`} />
+              <path d={`M ${endX - 4} ${middleY - 3.5} L ${endX} ${middleY} L ${endX - 4} ${middleY + 3.5}`} />
+            </g>
+          })
+        })}
       </svg>
       {layout.positions.map(position => {
         const node = state.nodes[position.nodeId]
         if (node === undefined) return null
         const label = labels.get(node.id) ?? 'PA'
+        const identityRoot = identityRootId(state, node.id)
+        const visibleLabel = node.forkSourceId === undefined
+          ? label
+          : labels.get(identityRoot) ?? label.replace(/(?:\s+fork)+$/i, '')
+        const mergeParentCount = node.forkSourceId === undefined
+          ? new Set(node.parentIds).size
+          : 0
         const isHead = node.id === state.headNodeId
         const isPreview = node.id === previewNodeId
-        const inContext = context.has(node.id)
+        const isDimmed = previewRelated !== null && !previewRelated.has(node.id)
         const isSelected = selectedNodes.has(node.id)
         const isCandidate = !isSelected && node.id === candidateNodeId
+        const isAnchored = isSelected && anchoredNodes.has(node.id)
         const selectionState = isSelected ? 'selected' : isCandidate ? 'candidate' : 'unselected'
         return <button
           type="button"
           disabled={disabled}
-          className={`dsh-git-tree-node ${isPreview ? 'dsh-git-tree-node-preview' : ''} ${inContext ? 'dsh-git-tree-node-context' : ''} ${isSelected ? 'dsh-git-tree-node-selected' : ''} ${isCandidate ? 'dsh-git-tree-node-candidate' : ''}`}
+          className={`dsh-git-tree-node ${isPreview ? 'dsh-git-tree-node-preview' : ''} ${isDimmed ? 'dsh-git-tree-node-dim' : ''} ${isSelected ? 'dsh-git-tree-node-selected' : ''} ${isCandidate ? 'dsh-git-tree-node-candidate' : ''}`}
           style={{
             left: position.x - NODE_WIDTH / 2,
             top: position.y,
             width: NODE_WIDTH,
             height: NODE_HEIGHT,
-            '--dsh-git-node-color': nodeColors === undefined
-              ? undefined
-              : `var(--dsh-git-session-${nodeColors.get(node.id) ?? 0})`,
-          } as CSSProperties}
+          }}
           key={node.id}
-          title={`${label}: ${node.prompt || localized('（无文字问题）', '(No text prompt)', locale)}`}
           aria-label={localized(`查看 ${label} context`, `View ${label} context`, locale)}
           aria-current={isHead ? 'true' : undefined}
           aria-pressed={selectionMode ? (isSelected ? true : isCandidate ? 'mixed' : false) : undefined}
           aria-controls={selectionMode ? 'dsh-git-pa-context-window' : undefined}
           aria-expanded={selectionMode ? isPreview : undefined}
           data-node-id={node.id}
+          data-layout-row={position.row}
+          data-layout-lane={position.lane}
           data-selection-state={selectionMode ? selectionState : undefined}
+          data-anchor-state={isAnchored ? 'anchored' : undefined}
           onClick={() => onPreview(node.id)}
         >
-          <span className="dsh-git-tree-node-label">{label}</span>
+          <span className="dsh-git-tree-node-label">{visibleLabel}</span>
+          {node.forkSourceId === undefined ? null : <span className="dsh-git-tree-relation-tag">FORK</span>}
+          {mergeParentCount < 2 ? null : <span className="dsh-git-tree-relation-tag">MERGE·{mergeParentCount}</span>}
           {isHead ? <span className="dsh-git-tree-head">HEAD</span> : null}
           {isCandidate ? <span className="dsh-git-tree-node-tag">{localized('预览', 'preview', locale)}</span> : null}
         </button>

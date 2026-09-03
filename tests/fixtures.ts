@@ -52,6 +52,7 @@ export function graph(nodes: readonly TurnNode[], overrides: Partial<GraphState>
     sessionBranches: { 'session-a': 'branch-a' },
     sessionTurnRefs: {},
     pendingMerges: {},
+    anchors: {},
     headNodeId: nodes.at(-1)?.id ?? null,
     previewNodeId: nodes.at(-1)?.id ?? null,
     contextManifest: nodes.map(value => value.id),

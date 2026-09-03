@@ -10,14 +10,25 @@ import { graph } from './fixtures.ts'
 
 afterEach(cleanup)
 
-function ActionHarness({ channel }: { channel: ContextTrayChannel }) {
+function ActionHarness({
+  channel, state = graph([]), dispatchAnchoredDraft = vi.fn(),
+}: {
+  channel: ContextTrayChannel
+  state?: ReturnType<typeof graph>
+  dispatchAnchoredDraft?: () => void
+}) {
   const useTray: SnapshotSelectorHook<ContextTrayProps | null> = selector =>
     useSyncExternalStore(
       channel.subscribe,
       () => selector(channel.getSnapshot()),
       () => selector(channel.getSnapshot()),
     )
-  return <ComposerDiscardAction {...({ useTray } as never)} />
+  return <ComposerDiscardAction {...({
+    useTray,
+    useGraph: (selector: (value: typeof state) => unknown) => selector(state),
+    sessionId: 'session-a',
+    dispatchAnchoredDraft,
+  } as never)} />
 }
 
 function model(overrides: Partial<ContextTrayProps> = {}): ContextTrayProps {
@@ -101,5 +112,40 @@ describe('ComposerDiscardAction', () => {
 
     act(() => { channel.publish({}, model({ dirty: true, busy: true, onDiscard })) })
     expect((screen.getByRole('button', { name: '放弃更改并发送' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('intercepts sends for anchor mode even when the Branches tray is unmounted', () => {
+    const channel = new ContextTrayChannel()
+    const dispatchAnchoredDraft = vi.fn()
+    const state = graph([], {
+      anchors: {
+        'session-a': {
+          sourceSessionId: 'session-a',
+          nodeIds: ['pa-fixed'],
+          workspaceId: 'anchor-workspace',
+          workspacePath: '/workspace/anchor',
+          workspaceTitle: 'Anchored questions',
+          createdAt: 1,
+        },
+      },
+    })
+    const card = document.createElement('div')
+    card.dataset['composerCard'] = ''
+    const textarea = document.createElement('textarea')
+    const mount = document.createElement('div')
+    card.append(textarea, mount)
+    document.body.appendChild(card)
+    render(<ActionHarness
+      channel={channel}
+      state={state}
+      dispatchAnchoredDraft={dispatchAnchoredDraft}
+    />, { container: mount })
+
+    const accepted = textarea.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+    )
+    expect(accepted).toBe(false)
+    expect(dispatchAnchoredDraft).toHaveBeenCalledTimes(1)
+    card.remove()
   })
 })

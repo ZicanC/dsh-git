@@ -5,6 +5,12 @@ export interface HistoryTurnSource {
   readonly sourceSessionId: string
   readonly sourceTurn: number
   readonly sourceBoundarySeq: number
+  /** Present only for Anchor mode, where the source Workspace PA number must survive. */
+  readonly sourceLabel?: string
+}
+
+export interface AnchoredHistoryTurnSource extends HistoryTurnSource {
+  readonly sourceLabel: string
 }
 
 /** Trusted browser-to-Host request used to create a merged session. */
@@ -18,11 +24,57 @@ export interface CreateMergedSessionResponse {
   readonly targetSessionId: string
 }
 
+/** Strict-isolation request: create one independent child in an Anchor Workspace. */
+export interface CreateAnchoredSessionRequest {
+  readonly targetSessionId: string
+  readonly workspaceId: string
+  readonly sources: readonly AnchoredHistoryTurnSource[]
+}
+
+export interface CreateAnchoredSessionResponse {
+  readonly targetSessionId: string
+}
+
+/** Host-scoped request for the dedicated Workspace used by Anchor mode. */
+export interface CreateAnchorWorkspaceRequest {
+  readonly sourceSessionId: string
+  readonly title: string
+  /** Order-insensitive source coordinates that give this Anchor Workspace a stable identity. */
+  readonly sources: readonly HistoryTurnSource[]
+}
+
+export interface CreateAnchorWorkspaceResponse {
+  readonly workspaceId: string
+  readonly workspacePath: string
+  readonly workspaceTitle: string
+}
+
+/** Host-scoped request to leave Anchor mode while retaining its reusable Workspace. */
+export interface CancelAnchorWorkspaceRequest {
+  readonly sourceSessionId: string
+  readonly workspaceId: string
+  /** Present when the browser can upgrade a legacy marker before leaving the mode. */
+  readonly sources?: readonly HistoryTurnSource[]
+}
+
+export interface CancelAnchorWorkspaceResponse {
+  /** Retained for protocol compatibility; reusable Anchor Workspaces are no longer removed. */
+  readonly removed: boolean
+}
+
 /** Generic Connection channel and endpoint used by the project graph reader. */
 export const PROJECT_GRAPH_RPC_CHANNEL = '/dsh-git'
 export const PROJECT_GRAPH_RPC_ENDPOINT = 'workspace/graph'
 export const HISTORY_PREVIEW_RPC_ENDPOINT = 'history/preview'
 export const CREATE_MERGED_SESSION_RPC_ENDPOINT = 'session/create-merged'
+export const CREATE_ANCHORED_SESSION_RPC_ENDPOINT = 'session/create-anchored'
+export const CREATE_ANCHOR_WORKSPACE_RPC_ENDPOINT = 'workspace/create-anchor'
+export const CANCEL_ANCHOR_WORKSPACE_RPC_ENDPOINT = 'workspace/cancel-anchor'
+export const ANCHORED_SESSION_PREFIX = 'dsh-git-anchor-'
+
+export function isAnchoredSessionId(value: string): boolean {
+  return value.startsWith(ANCHORED_SESSION_PREFIX)
+}
 
 /** Practical upper bound for one merged context while retaining full-session defaults. */
 export const MAX_MERGED_HISTORY_TURNS = 512
@@ -464,6 +516,101 @@ export function decodeCreateMergedSessionResponse(value: unknown): CreateMergedS
   return { targetSessionId: nonBlank(candidate.targetSessionId, `${label} targetSessionId`) }
 }
 
+/** Strictly validate an anchored-child creation request. */
+export function decodeCreateAnchoredSessionRequest(value: unknown): CreateAnchoredSessionRequest {
+  const label = 'dsh-git create anchored session request'
+  const candidate = object(value, label)
+  exactKeys(candidate, ['targetSessionId', 'workspaceId', 'sources'], label)
+  const rawSources = candidate.sources as readonly unknown[]
+  const sources = decodeHistoryTurnSources(candidate.sources, label).map((source, index) => {
+    const sourceLabel = `${label} source ${index + 1}`
+    const raw = object(rawSources[index], sourceLabel)
+    exactKeys(raw, [
+      'sourceSessionId', 'sourceTurn', 'sourceBoundarySeq', 'sourceLabel',
+    ], sourceLabel)
+    const displayLabel = nonBlank(raw.sourceLabel, `${sourceLabel} sourceLabel`)
+    if (!/^PA[1-9]\d*(?: fork)?$/.test(displayLabel)) {
+      throw new Error(`${sourceLabel} sourceLabel must be a PA number`)
+    }
+    return { ...source, sourceLabel: displayLabel }
+  })
+  return {
+    targetSessionId: nonBlank(candidate.targetSessionId, `${label} targetSessionId`),
+    workspaceId: nonBlank(candidate.workspaceId, `${label} workspaceId`),
+    sources,
+  }
+}
+
+export function decodeCreateAnchoredSessionResponse(value: unknown): CreateAnchoredSessionResponse {
+  const label = 'dsh-git create anchored session response'
+  const candidate = object(value, label)
+  exactKeys(candidate, ['targetSessionId'], label)
+  return { targetSessionId: nonBlank(candidate.targetSessionId, `${label} targetSessionId`) }
+}
+
+/** Validate an Anchor Workspace request without accepting a browser-supplied path. */
+export function decodeCreateAnchorWorkspaceRequest(value: unknown): CreateAnchorWorkspaceRequest {
+  const label = 'dsh-git create anchor workspace request'
+  const candidate = object(value, label)
+  exactKeys(candidate, ['sourceSessionId', 'title', 'sources'], label)
+  const title = nonBlank(candidate.title, `${label} title`).trim()
+  if (title.length > 200) throw new Error(`${label} title must not exceed 200 characters`)
+  const sources = decodeHistoryTurnSources(candidate.sources, label)
+  const rawSources = candidate.sources as readonly unknown[]
+  rawSources.forEach((source, index) => {
+    const sourceLabel = `${label} source ${index + 1}`
+    exactKeys(object(source, sourceLabel), [
+      'sourceSessionId', 'sourceTurn', 'sourceBoundarySeq',
+    ], sourceLabel)
+  })
+  return {
+    sourceSessionId: nonBlank(candidate.sourceSessionId, `${label} sourceSessionId`),
+    title,
+    sources,
+  }
+}
+
+export function decodeCreateAnchorWorkspaceResponse(value: unknown): CreateAnchorWorkspaceResponse {
+  const label = 'dsh-git create anchor workspace response'
+  const candidate = object(value, label)
+  exactKeys(candidate, ['workspaceId', 'workspacePath', 'workspaceTitle'], label)
+  return {
+    workspaceId: nonBlank(candidate.workspaceId, `${label} workspaceId`),
+    workspacePath: nonBlank(candidate.workspacePath, `${label} workspacePath`),
+    workspaceTitle: nonBlank(candidate.workspaceTitle, `${label} workspaceTitle`),
+  }
+}
+
+/** Validate an Anchor cleanup request without accepting a browser-supplied path. */
+export function decodeCancelAnchorWorkspaceRequest(value: unknown): CancelAnchorWorkspaceRequest {
+  const label = 'dsh-git cancel anchor workspace request'
+  const candidate = object(value, label)
+  exactKeys(candidate, ['sourceSessionId', 'workspaceId', 'sources'], label)
+  let sources: readonly HistoryTurnSource[] | undefined
+  if (candidate.sources !== undefined) {
+    sources = decodeHistoryTurnSources(candidate.sources, label)
+    const rawSources = candidate.sources as readonly unknown[]
+    rawSources.forEach((source, index) => {
+      const sourceLabel = `${label} source ${index + 1}`
+      exactKeys(object(source, sourceLabel), [
+        'sourceSessionId', 'sourceTurn', 'sourceBoundarySeq',
+      ], sourceLabel)
+    })
+  }
+  return {
+    sourceSessionId: nonBlank(candidate.sourceSessionId, `${label} sourceSessionId`),
+    workspaceId: nonBlank(candidate.workspaceId, `${label} workspaceId`),
+    ...(sources === undefined ? {} : { sources }),
+  }
+}
+
+export function decodeCancelAnchorWorkspaceResponse(value: unknown): CancelAnchorWorkspaceResponse {
+  const label = 'dsh-git cancel anchor workspace response'
+  const candidate = object(value, label)
+  exactKeys(candidate, ['removed'], label)
+  return { removed: boolean(candidate.removed, `${label} removed`) }
+}
+
 /** Strictly validate the untrusted project graph RPC request. */
 export function decodeProjectGraphRequest(value: unknown): ProjectGraphRequest {
   const candidate = object(value, 'dsh-git project graph request')
@@ -480,6 +627,12 @@ function decodeMergeSources(value: unknown, label: string): readonly MergeLineag
       if (parsed < 1) throw new Error(`${label} mergeSource ${index + 1} ${field} must be positive`)
       return parsed
     }
+    const sourceLabel = source.sourceLabel === undefined
+      ? undefined
+      : nonBlank(source.sourceLabel, `${label} mergeSource ${index + 1} sourceLabel`)
+    if (sourceLabel !== undefined && !/^PA[1-9]\d*(?: fork)?$/.test(sourceLabel)) {
+      throw new Error(`${label} mergeSource ${index + 1} sourceLabel must be a PA number`)
+    }
     return {
       sourceSessionId: nonBlank(source.sourceSessionId, `${label} mergeSource ${index + 1} sourceSessionId`),
       sourceTurn: positive(source.sourceTurn, 'sourceTurn'),
@@ -488,6 +641,7 @@ function decodeMergeSources(value: unknown, label: string): readonly MergeLineag
         `${label} mergeSource ${index + 1} sourceBoundarySeq`,
       ),
       targetTurn: positive(source.targetTurn, 'targetTurn'),
+      ...(sourceLabel === undefined ? {} : { sourceLabel }),
     }
   })
 }

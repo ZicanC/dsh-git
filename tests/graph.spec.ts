@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { joinsLineages, layoutGraph, missingDirectDependencies, primaryPath } from '../src/client/graph.ts'
+import {
+  joinsLineages, layoutGraph, lineageParentPlan, missingDirectDependencies,
+  normalizeContextOccurrences, paIdentityId, primaryPath,
+} from '../src/client/graph.ts'
 import { graph, node } from './fixtures.ts'
 
 describe('conversation graph', () => {
@@ -35,6 +38,43 @@ describe('conversation graph', () => {
     expect(joinsLineages(spread, ['pa1', 'pa5'])).toBe(true)
     // A stale reference cannot invent a second lineage.
     expect(joinsLineages(spread, ['pa1', 'missing'])).toBe(false)
+  })
+
+  it('uses each Session terminal in terminal Tray order for lineage parents', () => {
+    const a1 = node({ id: 'a1', sessionId: 'a', createdAt: 1 })
+    const b1 = node({ id: 'b1', sessionId: 'b', createdAt: 2 })
+    const a2 = node({ id: 'a2', sessionId: 'a', createdAt: 3 })
+    const c1 = node({ id: 'c1', sessionId: 'c', createdAt: 4 })
+    const b2 = node({ id: 'b2', sessionId: 'b', createdAt: 5 })
+    const spread = graph([a1, b1, a2, c1, b2])
+
+    expect(lineageParentPlan(spread, ['a1', 'b1', 'a2', 'c1', 'b2'])).toEqual({
+      parentIds: ['a2', 'c1', 'b2'],
+      primaryParentId: 'b2',
+    })
+    expect(lineageParentPlan(spread, ['a1', 'a2'])).toEqual({
+      parentIds: ['a2'],
+      primaryParentId: 'a2',
+    })
+  })
+
+  it('treats an original PA and its fork copies as one Context identity', () => {
+    const original = node({ id: 'original', sessionId: 'source', createdAt: 1 })
+    const fork = node({
+      id: 'fork', sessionId: 'fork-session', createdAt: 2,
+      forkSourceId: original.id, primaryParentId: null, parentIds: [],
+    })
+    const other = node({ id: 'other', sessionId: 'other-session', createdAt: 3 })
+    const spread = graph([original, fork, other])
+
+    expect(paIdentityId(spread, fork.id)).toBe(original.id)
+    expect(normalizeContextOccurrences(spread, [original.id, other.id, fork.id]))
+      .toEqual([fork.id, other.id])
+    expect(lineageParentPlan(spread, [original.id, fork.id])).toEqual({
+      parentIds: [fork.id],
+      primaryParentId: fork.id,
+    })
+    expect(joinsLineages(spread, [original.id, fork.id])).toBe(false)
   })
 
 })

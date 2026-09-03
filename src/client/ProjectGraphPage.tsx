@@ -6,6 +6,7 @@ import { GraphCanvas } from './GraphCanvas.tsx'
 import { assembleProjectGraph, projectGraphAt, type ProjectGraphModel } from './project-graph.ts'
 import type { GraphState, TurnNodeId } from './types.ts'
 import { localized, useLocale, type Locale } from './i18n.ts'
+import { nodeLabelMap } from './labels.ts'
 
 export interface ProjectGraphPageProps {
   readonly workspaceId: string
@@ -58,13 +59,7 @@ export function ProjectGraphPage({
   }, [onClose])
 
   const labels = useMemo(() => {
-    const result = new Map<TurnNodeId, string>(model?.timeline.map((id, index) => [id, `PA${index + 1}`]) ?? [])
-    if (model === null) return result
-    for (const node of Object.values(model.nodes)) {
-      if (node.forkSourceId === undefined) continue
-      result.set(node.id, `${result.get(node.forkSourceId) ?? 'PA'} fork`)
-    }
-    return result
+    return model === null ? new Map<TurnNodeId, string>() : nodeLabelMap(model.state)
   }, [model])
   const nodeColors = useMemo(() => {
     const colors = new Map<TurnNodeId, number>()

@@ -10,15 +10,17 @@ export interface GraphCanvasProps {
     readonly selectedNodeIds?: readonly TurnNodeId[];
     /** Optional uncommitted node being previewed for addition. */
     readonly candidateNodeId?: TurnNodeId | null;
+    /** Frozen included nodes while strict-isolation anchor mode is active. */
+    readonly anchoredNodeIds?: readonly TurnNodeId[] | undefined;
     /** Make node inspection inert while a merge transaction is in flight. */
     readonly disabled?: boolean;
     /** Optional project-level PA labels ordered by completion time. */
     readonly labels?: ReadonlyMap<TurnNodeId, string>;
-    /** Optional stable color index per project Session. */
+    /** @deprecated Accepted for caller compatibility; the final graph does not color nodes by Session. */
     readonly nodeColors?: ReadonlyMap<TurnNodeId, number>;
 }
 /** Compact tree visualization: node details are intentionally kept out of the graph. */
-declare function GraphCanvasView({ state, previewNodeId, onPreview, selectedNodeIds, candidateNodeId, disabled, labels: suppliedLabels, nodeColors, }: GraphCanvasProps): import("react").JSX.Element;
+declare function GraphCanvasView({ state, previewNodeId, onPreview, selectedNodeIds, candidateNodeId, anchoredNodeIds, disabled, labels: suppliedLabels, }: GraphCanvasProps): import("react").JSX.Element;
 /**
  * Memoized at the seam: laying out the tree is the most expensive render in
  * the workbench, and nothing about it changes while an answer streams beside

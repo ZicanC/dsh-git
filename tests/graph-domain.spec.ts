@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { GRAPH_DOMAIN, MAX_SCOPE_ID_LENGTH, assertScopeId, graphStateSchema } from '../src/graph-domain.ts'
 import {
+  decodeCancelAnchorWorkspaceRequest,
+  decodeCreateAnchorWorkspaceRequest,
+  decodeCreateAnchoredSessionRequest,
   decodeGraphReadRequest, decodeGraphReadResponse, decodeGraphWriteRequest,
 } from '../src/protocol.ts'
 import { GraphRepository } from '../src/client/repository.ts'
@@ -58,6 +61,11 @@ describe('graph domain', () => {
     expect(graphStateSchema.parse(EMPTY_GRAPH_STATE)).toEqual(EMPTY_GRAPH_STATE)
   })
 
+  it('upgrades a pre-anchor format-1 ledger with an empty anchor map', () => {
+    const { anchors: _anchors, ...legacy } = EMPTY_GRAPH_STATE
+    expect(graphStateSchema.parse(legacy).anchors).toEqual({})
+  })
+
   it('rejects a ledger whose node lost a required field', () => {
     const broken = {
       ...EMPTY_GRAPH_STATE,
@@ -98,5 +106,55 @@ describe('ledger wire decoders', () => {
   it('refuses a write with a missing scope or a non-object state', () => {
     expect(() => decodeGraphWriteRequest({ state: EMPTY_GRAPH_STATE })).toThrow(/scopeId/)
     expect(() => decodeGraphWriteRequest({ scopeId: 'workspace:one', state: [] })).toThrow(/must be an object/)
+  })
+})
+
+describe('anchor wire decoder', () => {
+  const request = {
+    targetSessionId: 'dsh-git-anchor-child',
+    workspaceId: 'anchor-workspace',
+    sources: [{
+      sourceSessionId: 'source', sourceTurn: 1, sourceBoundarySeq: 4, sourceLabel: 'PA7',
+    }],
+  }
+
+  it('accepts only an exact Workspace-bound source manifest', () => {
+    expect(decodeCreateAnchoredSessionRequest(request)).toEqual(request)
+    expect(() => decodeCreateAnchoredSessionRequest({ ...request, extra: true })).toThrow(/unexpected field/)
+    expect(() => decodeCreateAnchoredSessionRequest({ ...request, workspaceId: ' ' })).toThrow(/non-blank/)
+    expect(() => decodeCreateAnchoredSessionRequest({ ...request, sources: [] })).toThrow(/requires 1/)
+    expect(() => decodeCreateAnchoredSessionRequest({
+      ...request, sources: [{ ...request.sources[0], sourceLabel: 'S1.1' }],
+    })).toThrow(/must be a PA number/)
+  })
+
+  it('requires source coordinates when requesting a reusable Anchor Workspace', () => {
+    const workspaceRequest = {
+      sourceSessionId: 'source',
+      title: 'Anchored questions',
+      sources: [{ sourceSessionId: 'source', sourceTurn: 1, sourceBoundarySeq: 4 }],
+    }
+    expect(decodeCreateAnchorWorkspaceRequest(workspaceRequest)).toEqual(workspaceRequest)
+    expect(() => decodeCreateAnchorWorkspaceRequest({
+      ...workspaceRequest,
+      sources: [{ ...workspaceRequest.sources[0], sourceLabel: 'PA7' }],
+    })).toThrow(/unexpected field "sourceLabel"/)
+    expect(() => decodeCreateAnchorWorkspaceRequest({
+      sourceSessionId: 'source', title: 'Anchored questions', sources: [],
+    })).toThrow(/requires 1/)
+  })
+
+  it('accepts only the source and workspace ids needed to leave Anchor mode', () => {
+    const cancelRequest = { sourceSessionId: 'source', workspaceId: 'anchor-workspace' }
+    expect(decodeCancelAnchorWorkspaceRequest(cancelRequest)).toEqual(cancelRequest)
+    expect(decodeCancelAnchorWorkspaceRequest({
+      ...cancelRequest,
+      sources: [{ sourceSessionId: 'source', sourceTurn: 1, sourceBoundarySeq: 4 }],
+    })).toEqual({
+      ...cancelRequest,
+      sources: [{ sourceSessionId: 'source', sourceTurn: 1, sourceBoundarySeq: 4 }],
+    })
+    expect(() => decodeCancelAnchorWorkspaceRequest({ ...cancelRequest, path: '/project' }))
+      .toThrow(/unexpected field "path"/)
   })
 })

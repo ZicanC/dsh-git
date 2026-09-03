@@ -1,4 +1,4 @@
-export type { BranchId, ConversationBranch, GraphState, PendingMerge, TurnNode, TurnNodeId, } from '../graph-state.ts';
+export type { AnchorModeState, BranchId, ConversationBranch, GraphState, PendingMerge, TurnNode, TurnNodeId, } from '../graph-state.ts';
 export { EMPTY_GRAPH_STATE } from '../graph-state.ts';
 import type { TurnNodeId } from '../graph-state.ts';
 /** One extracted completed DSH turn. */

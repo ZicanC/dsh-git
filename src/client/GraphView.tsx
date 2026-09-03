@@ -13,6 +13,7 @@ import {
 import type { ContextTrayProps } from './ContextTray.tsx'
 import type { ContextTrayChannel } from './context-tray-channel.ts'
 import { GraphCanvas } from './GraphCanvas.tsx'
+import { paIdentityId } from './graph.ts'
 import { HistoryRail } from './HistoryRail.tsx'
 import { historyRailModel } from './history-rail.ts'
 import { PAContextWindow } from './PAContextWindow.tsx'
@@ -23,7 +24,7 @@ import { HistoryPreviewCache, previewSourceKey } from './preview-cache.ts'
 import { nodeLabelMap } from './labels.ts'
 import { assembleProjectGraph } from './project-graph.ts'
 import { localized, useLocale } from './i18n.ts'
-import type { GraphState, ImportedTurn, TurnNodeId } from './types.ts'
+import type { AnchorModeState, GraphState, ImportedTurn, TurnNodeId } from './types.ts'
 
 export interface ProjectGraphLoad {
   readonly response: ProjectGraphResponse
@@ -53,6 +54,10 @@ export interface GraphViewInjected {
   ) => Promise<LoadedPreviewImage>
   /** Returns whether the composer is free after the requested lease change. */
   readonly setComposerBlocked: (blocked: boolean) => boolean
+  readonly activateAnchor: (
+    manifest: readonly TurnNodeId[], signal: AbortSignal,
+  ) => Promise<AnchorModeState>
+  readonly cancelAnchor: (signal: AbortSignal) => Promise<void>
   readonly createMergedSession: (
     manifest: readonly TurnNodeId[], draft: MergeDraftTransfer, signal: AbortSignal,
   ) => Promise<void>
@@ -90,7 +95,7 @@ function isAbort(cause: unknown, signal: AbortSignal): boolean {
 export function GraphView({
   sessionId, useSession, useInput, inputActions, useGraph, syncTurns,
   adoptObservedGraph, loadProjectGraph, loadHistoryPreview, loadPreviewImage,
-  tray, setComposerBlocked, createMergedSession,
+  tray, setComposerBlocked, activateAnchor, cancelAnchor, createMergedSession,
 }: ConvViewProps & InjectFace<GraphViewInjected>) {
   const locale = useLocale()
   // Narrow subscriptions: an assistant delta swaps only `partial`, so the
@@ -122,8 +127,10 @@ export function GraphView({
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [anchorBusy, setAnchorBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const mergeAbortRef = useRef<AbortController | null>(null)
+  const anchorAbortRef = useRef<AbortController | null>(null)
   const trayOwnerRef = useRef<object>({})
   // A completed turn is immutable, so its records are cached for the lifetime
   // of this view and never re-read when the selection changes.
@@ -132,6 +139,7 @@ export function GraphView({
   const previewAbortRef = useRef<AbortController | null>(null)
 
   useEffect(() => () => { mergeAbortRef.current?.abort() }, [])
+  useEffect(() => () => { anchorAbortRef.current?.abort() }, [])
   useEffect(() => () => { previewAbortRef.current?.abort() }, [])
 
   useEffect(() => { syncTurns(turns) }, [turnSignature, syncTurns])
@@ -152,6 +160,8 @@ export function GraphView({
     ? null
     : assembleProjectGraph(project.response, localState, project.sessionTitles), [project, localState])
   const state = projectModel?.state ?? localState
+  const anchor = localState.anchors[String(sessionId)]
+  const anchorActive = anchor !== undefined
 
   useEffect(() => {
     if (projectModel !== null) adoptObservedGraph(projectModel.state)
@@ -165,6 +175,15 @@ export function GraphView({
     setSelectedIds(currentSessionIds)
   }, [currentSessionKey, selectionTouched])
 
+  useEffect(() => {
+    if (anchor === undefined) return
+    const fixed = anchor.nodeIds.filter(nodeId => state.nodes[nodeId] !== undefined)
+    setSelectedIds(fixed)
+    setCandidateId(null)
+    setInspectedId(null)
+    setSelectionTouched(true)
+  }, [anchor, state.nodes])
+
   // A candidate that was only inspected and then closed is not a lasting edit.
   // Re-arm baseline following so a later official turn joins the blue history.
   useEffect(() => {
@@ -174,7 +193,7 @@ export function GraphView({
   }, [selectionTouched, candidateId, selectedIds, baselineIds])
 
   const labels = useMemo(() => nodeLabelMap(state), [state])
-  const dirty = candidateId !== null || !sameIds(selectedIds, baselineIds)
+  const dirty = !anchorActive && (candidateId !== null || !sameIds(selectedIds, baselineIds))
   const previewId = candidateId !== null && !selectedIds.includes(candidateId) ? candidateId : null
   const previewIndex = Math.min(Math.max(candidateIndex, 0), selectedIds.length)
   const orderedPreviewIds = useMemo(() => previewId === null
@@ -197,9 +216,9 @@ export function GraphView({
   // Context keeps the composer typable — the composer-row guard refuses the
   // send gestures instead, so the draft can be written before the Merge.
   useEffect(() => {
-    setComposerBlocked(busy)
+    setComposerBlocked(busy || anchorBusy)
     return () => { setComposerBlocked(false) }
-  }, [busy, setComposerBlocked, locale])
+  }, [busy, anchorBusy, setComposerBlocked, locale])
 
   const overLimit = previewEntries.length > MAX_MERGED_HISTORY_TURNS
 
@@ -275,16 +294,9 @@ export function GraphView({
   })), [nodes, timeline, partial, runningCalls, registeredTurn, sessionId, locale])
 
   const inspect = (nodeId: TurnNodeId): void => {
-    if (busy) return
+    if (busy || anchorBusy || anchorActive) return
     setActionError(null)
     setInspectedId(nodeId)
-    if (selectedIds.includes(nodeId)) {
-      setCandidateId(null)
-      return
-    }
-    setCandidateId(nodeId)
-    setCandidateIndex(selectedIds.length)
-    setSelectionTouched(true)
   }
 
   const closeInspector = (): void => {
@@ -308,18 +320,24 @@ export function GraphView({
   }, [])
 
   const addCandidate = (): void => {
-    if (busy) return
-    if (candidateId === null || state.nodes[candidateId] === undefined) return
-    // Commit the preview where the user parked it, not at the end.
-    setSelectedIds(ids => ids.includes(candidateId)
-      ? ids
-      : [...ids.slice(0, previewIndex), candidateId, ...ids.slice(previewIndex)])
+    if (busy || anchorBusy || anchorActive) return
+    if (inspectedId === null || state.nodes[inspectedId] === undefined) return
+    // Inspecting is read-only. Only this explicit action changes Context.
+    setSelectedIds((ids) => {
+      const identityId = paIdentityId(state, inspectedId)
+      const existingIndex = ids.findIndex(nodeId => paIdentityId(state, nodeId) === identityId)
+      if (existingIndex < 0) return [...ids, inspectedId]
+      if (ids[existingIndex] === inspectedId) return ids
+      const next = [...ids]
+      next[existingIndex] = inspectedId
+      return next
+    })
     setCandidateId(null)
     setSelectionTouched(true)
   }
 
   const remove = (nodeId: TurnNodeId): void => {
-    if (busy) return
+    if (busy || anchorBusy || anchorActive) return
     setSelectedIds(ids => ids.filter(id => id !== nodeId))
     if (inspectedId === nodeId) setInspectedId(null)
     if (candidateId === nodeId) setCandidateId(null)
@@ -335,7 +353,7 @@ export function GraphView({
   }
 
   const move = (nodeId: TurnNodeId, beforeId: TurnNodeId): void => {
-    if (busy) return
+    if (busy || anchorBusy || anchorActive) return
     if (nodeId === beforeId || !orderedPreviewIds.includes(nodeId)) return
     const next = orderedPreviewIds.filter(id => id !== nodeId)
     const index = next.indexOf(beforeId)
@@ -345,7 +363,7 @@ export function GraphView({
   }
 
   const moveEnd = (nodeId: TurnNodeId): void => {
-    if (busy) return
+    if (busy || anchorBusy || anchorActive) return
     if (!orderedPreviewIds.includes(nodeId)) return
     commitOrder([...orderedPreviewIds.filter(id => id !== nodeId), nodeId])
   }
@@ -365,7 +383,7 @@ export function GraphView({
   }
 
   const merge = async (): Promise<void> => {
-    if (busy || selectedIds.length === 0 || candidateId !== null) return
+    if (busy || anchorBusy || anchorActive || selectedIds.length === 0 || candidateId !== null) return
     if (input.phase !== 'plain') {
       setActionError(localized(
         '官方输入框正在处理另一项操作；请等待输入状态稳定后再 Merge。',
@@ -408,6 +426,54 @@ export function GraphView({
     }
   }
 
+  const toggleAnchor = async (): Promise<void> => {
+    if (busy || anchorBusy) return
+    setActionError(null)
+    if (anchorActive) {
+      const controller = new AbortController()
+      anchorAbortRef.current = controller
+      setAnchorBusy(true)
+      try {
+        await cancelAnchor(controller.signal)
+        setSelectedIds(currentSessionIds)
+        setBaselineIds(currentSessionIds)
+        setSelectionTouched(false)
+        setCandidateId(null)
+        setInspectedId(null)
+      } catch (cause: unknown) {
+        if (!isAbort(cause, controller.signal)) {
+          setActionError(cause instanceof Error ? cause.message : String(cause))
+        }
+      } finally {
+        if (anchorAbortRef.current === controller) anchorAbortRef.current = null
+        setAnchorBusy(false)
+      }
+      return
+    }
+    if (candidateId !== null) {
+      setActionError(localized(
+        '请先加入或关闭绿色预览 PA，再固定锚点。',
+        'Add or close the green preview PA before fixing the anchor.', locale,
+      ))
+      return
+    }
+    if (selectedIds.length === 0 || selectedIds.length > MAX_MERGED_HISTORY_TURNS) return
+    const controller = new AbortController()
+    anchorAbortRef.current?.abort()
+    anchorAbortRef.current = controller
+    setAnchorBusy(true)
+    try {
+      await activateAnchor(selectedIds, controller.signal)
+    } catch (cause: unknown) {
+      if (!isAbort(cause, controller.signal)) {
+        setActionError(cause instanceof Error ? cause.message : String(cause))
+      }
+    } finally {
+      if (anchorAbortRef.current === controller) anchorAbortRef.current = null
+      setAnchorBusy(false)
+    }
+  }
+
   const inspected = inspectedId === null ? undefined : state.nodes[inspectedId]
   const inspectedSelected = inspectedId !== null && selectedIds.includes(inspectedId)
   // Memoized: the canvas re-lays out the whole tree whenever this object's
@@ -432,7 +498,9 @@ export function GraphView({
     selectedIds,
     orderedIds: orderedPreviewIds,
     candidateId,
-    busy,
+    busy: busy || anchorBusy,
+    anchored: anchorActive,
+    anchorWorkspaceTitle: anchor?.workspaceTitle,
     error: actionError,
     dirty,
     draftHasContent,
@@ -470,22 +538,38 @@ export function GraphView({
         <section className="dsh-git-graph-panel" aria-label="Conversation Graph">
           <header className="dsh-git-heading">
             <span>Conversation Graph</span>
-            {projectError === null
-              ? <span className="dsh-git-legend">
+            <span className="dsh-git-legend">
+              {projectError === null ? <>
                 <span className="dsh-git-legend-bar" aria-hidden="true" />
                 <span>{localized('已加入', 'Included', locale)}</span>
-                <span className="dsh-git-legend-dot" aria-hidden="true" />
-                <span className="dsh-git-legend-bar dsh-git-legend-bar-preview" aria-hidden="true" />
-                <span>{localized('预览', 'Preview', locale)}</span>
-              </span>
-              : <span className="dsh-git-muted">{projectError}</span>}
+              </> : <span className="dsh-git-muted">{projectError}</span>}
+              <button
+                className="dsh-git-anchor-button"
+                data-active={anchorActive ? '' : undefined}
+                type="button"
+                aria-pressed={anchorActive}
+                disabled={anchorBusy || busy || (!anchorActive && (selectedIds.length === 0 || candidateId !== null))}
+                title={anchorActive
+                  ? localized(`取消锚点；若「${anchor.workspaceTitle}」仍为空则清理它`, `Cancel anchor; remove “${anchor.workspaceTitle}” if it is still empty`, locale)
+                  : localized('固定蓝色 PA，并创建隔离的并列问题 Workspace', 'Fix the blue PAs and create an isolated Workspace for parallel questions', locale)}
+                onClick={() => { void toggleAnchor() }}
+              >
+                <span aria-hidden="true">⌖</span>
+                {anchorBusy
+                  ? localized('正在处理…', 'Working…', locale)
+                  : anchorActive
+                    ? localized(`已锚定 ${anchor.nodeIds.length}`, `${anchor.nodeIds.length} anchored`, locale)
+                    : localized('锚定', 'Anchor', locale)}
+              </button>
+            </span>
           </header>
           <GraphCanvas
             state={canvasState}
             previewNodeId={inspectedId}
             selectedNodeIds={selectedIds}
             candidateNodeId={candidateId}
-            disabled={busy}
+            anchoredNodeIds={anchor?.nodeIds}
+            disabled={busy || anchorBusy || anchorActive}
             onPreview={inspect}
           />
         </section>
@@ -494,7 +578,7 @@ export function GraphView({
           nodeId={inspectedId}
           label={labels.get(inspectedId) ?? 'PA'}
           selected={inspectedSelected}
-          disabled={busy}
+          disabled={busy || anchorBusy || anchorActive}
           onAdd={addCandidate}
           onRemove={() => remove(inspectedId)}
           onClose={closeInspector}
@@ -527,7 +611,7 @@ export function GraphView({
           : graphOpen ? 'dsh-git-chat-body-rail' : 'dsh-git-chat-body-rail-expanded'}`}>
           <HistoryRail
             {...rail}
-            disabled={busy}
+            disabled={busy || anchorBusy}
             expanded={!graphOpen}
             onSelect={jumpToHistory}
             onActiveChange={setActiveTrailId}

@@ -45,11 +45,76 @@ export function missingDirectDependencies(
  * pulled from a second Session make the new Chat a Merge.
  */
 export function joinsLineages(state: GraphState, manifest: readonly TurnNodeId[]): boolean {
-  const sessions = new Set(manifest.flatMap((id) => {
+  const sessions = new Set(normalizeContextOccurrences(state, manifest).flatMap((id) => {
     const node = state.nodes[id]
     return node === undefined ? [] : [node.sessionId]
   }))
   return sessions.size > 1
+}
+
+/** Resolve every visual fork copy to the original PA identity it represents. */
+export function paIdentityId(state: GraphState, nodeId: TurnNodeId): TurnNodeId {
+  const visited = new Set<TurnNodeId>()
+  let cursor = nodeId
+  while (!visited.has(cursor)) {
+    visited.add(cursor)
+    const source = state.nodes[cursor]?.forkSourceId
+    if (source === undefined || state.nodes[source] === undefined) return cursor
+    cursor = source
+  }
+  // Malformed cycles remain deterministic and are rejected by the durable
+  // validation layer once occurrence identity becomes part of the schema.
+  return [...visited].sort()[0] ?? nodeId
+}
+
+/**
+ * Keep one occurrence per PA identity without moving its original Tray slot.
+ *
+ * Selecting another fork copy replaces the occurrence stored in that slot;
+ * it never adds a second copy of the same PA to the outgoing Context.
+ */
+export function normalizeContextOccurrences(
+  state: GraphState,
+  manifest: readonly TurnNodeId[],
+): readonly TurnNodeId[] {
+  const entries = new Map<TurnNodeId, { nodeId: TurnNodeId, firstIndex: number }>()
+  manifest.forEach((nodeId, index) => {
+    if (state.nodes[nodeId] === undefined) return
+    const identityId = paIdentityId(state, nodeId)
+    const existing = entries.get(identityId)
+    entries.set(identityId, { nodeId, firstIndex: existing?.firstIndex ?? index })
+  })
+  return [...entries.values()]
+    .sort((left, right) => left.firstIndex - right.firstIndex)
+    .map(entry => entry.nodeId)
+}
+
+/** Parent endpoints derived from one ordered Context Tray snapshot. */
+export interface LineageParentPlan {
+  readonly parentIds: readonly TurnNodeId[]
+  readonly primaryParentId: TurnNodeId | null
+}
+
+/**
+ * Keep only the last selected PA from each source Session.
+ *
+ * The surviving endpoints retain the order of their own final Tray positions,
+ * rather than the order in which their Sessions first appeared. The final
+ * surviving endpoint is therefore also the layout-primary parent.
+ */
+export function lineageParentPlan(
+  state: GraphState,
+  manifest: readonly TurnNodeId[],
+): LineageParentPlan {
+  const terminalBySession = new Map<string, { readonly nodeId: TurnNodeId, readonly index: number }>()
+  normalizeContextOccurrences(state, manifest).forEach((nodeId, index) => {
+    const node = state.nodes[nodeId]
+    if (node !== undefined) terminalBySession.set(node.sessionId, { nodeId, index })
+  })
+  const parentIds = [...terminalBySession.values()]
+    .sort((left, right) => left.index - right.index)
+    .map(entry => entry.nodeId)
+  return { parentIds, primaryParentId: parentIds.at(-1) ?? null }
 }
 
 /** Assign stable lanes and parent edges for a compact GitLens-style graph. */

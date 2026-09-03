@@ -1,5 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import { nodeHash } from '../src/client/labels.ts'
+import { nodeHash, nodeLabelMap } from '../src/client/labels.ts'
+import { graph, node } from './fixtures.ts'
+
+describe('nodeLabelMap', () => {
+  it('retains durable anchor labels and parallel Session labels', () => {
+    const source = node({ id: 'source', displayLabel: 'PA7' })
+    const child = node({
+      id: 'child', sessionId: 'dsh-git-anchor-child', turn: 3,
+      displayLabel: 'S1.1', primaryParentId: 'source', parentIds: ['source'],
+    })
+    const labels = nodeLabelMap(graph([source, child]))
+    expect(labels.get('source')).toBe('PA7')
+    expect(labels.get('child')).toBe('S1.1')
+  })
+})
 
 describe('nodeHash', () => {
   it('shortens Session PA ids to the trailing hash', () => {

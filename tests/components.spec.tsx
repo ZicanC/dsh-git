@@ -91,6 +91,15 @@ function graphViewFixture(
   const createMergedSession = vi.fn(async (
     _manifest: unknown, _draft: unknown, _signal: AbortSignal,
   ) => {})
+  const activateAnchor = vi.fn(async (manifest: readonly string[]) => ({
+    sourceSessionId: 'session-a',
+    nodeIds: manifest,
+    workspaceId: 'anchor-workspace',
+    workspacePath: '/workspace/dsh-git-anchors-test',
+    workspaceTitle: '锚点问题 · Test',
+    createdAt: 1,
+  }))
+  const cancelAnchor = vi.fn(async () => {})
   const loadHistoryPreview = vi.fn(async (sources: readonly HistoryTurnSource[]) => previewFor(sources))
   const tray = new ContextTrayChannel()
   const props = {
@@ -106,9 +115,14 @@ function graphViewFixture(
     loadPreviewImage: vi.fn(async () => ({ url: 'blob:test', release: vi.fn() })),
     tray,
     setComposerBlocked,
+    activateAnchor,
+    cancelAnchor,
     createMergedSession,
   }
-  return { props, tray, live, submit, setComposerBlocked, createMergedSession, loadHistoryPreview }
+  return {
+    props, tray, live, submit, setComposerBlocked, activateAnchor, cancelAnchor,
+    createMergedSession, loadHistoryPreview,
+  }
 }
 
 type GraphViewFixture = ReturnType<typeof graphViewFixture>
@@ -123,7 +137,12 @@ function GraphViewHarness({ fixture }: { fixture: GraphViewFixture }) {
   return <>
     <GraphView {...(fixture.props as never)} />
     <ContextTrayDock {...({ useTray } as never)} />
-    <ComposerDiscardAction {...({ useTray } as never)} />
+    <ComposerDiscardAction {...({
+      useTray,
+      useGraph: fixture.props.useGraph,
+      sessionId: 'session-a',
+      dispatchAnchoredDraft: vi.fn(),
+    } as never)} />
   </>
 }
 
@@ -191,6 +210,43 @@ describe('graph UI', () => {
     expect(view.container.querySelector('.dsh-git-workbench-graph-closed')).toBeNull()
     expect(view.container.querySelector('.dsh-git-rail-expanded')).toBeNull()
     expect(view.container.querySelectorAll('.dsh-git-rail-dash')).toHaveLength(2)
+  })
+
+  it('creates an anchor from included PAs and shows only Included plus the active anchor', async () => {
+    const inactive = graphViewFixture(state)
+    const firstView = renderGraphView(inactive)
+    fireEvent.click(within(screen.getByLabelText('Conversation Graph'))
+      .getByRole('button', { name: '锚定' }))
+    await vi.waitFor(() => expect(inactive.activateAnchor).toHaveBeenCalledWith(
+      [one.id, two.id], expect.any(AbortSignal),
+    ))
+    firstView.unmount()
+
+    const anchoredState = graph([one, two, three], {
+      sessionTurnRefs: { 'session-a': { 1: one.id, 2: two.id }, 'session-b': { 1: three.id } },
+      anchors: {
+        'session-a': {
+          sourceSessionId: 'session-a',
+          nodeIds: [one.id, two.id],
+          workspaceId: 'anchor-workspace',
+          workspacePath: '/workspace/dsh-git-anchors-test',
+          workspaceTitle: '锚点问题 · Test',
+          createdAt: 1,
+        },
+      },
+    })
+    const active = graphViewFixture(anchoredState)
+    renderGraphView(active)
+    const graphSurface = screen.getByLabelText('Conversation Graph')
+    const header = graphSurface.querySelector('.dsh-git-heading') as HTMLElement
+    expect(within(header).getByText('已加入')).toBeTruthy()
+    expect(within(header).queryByText('预览')).toBeNull()
+    const anchorButton = within(header).getByRole('button', { name: '已锚定 2', pressed: true })
+    expect(screen.getByRole('button', { name: '查看 PA1 context' }).dataset.anchorState).toBe('anchored')
+    expect(screen.getByRole('button', { name: '查看 PA2 context' }).dataset.anchorState).toBe('anchored')
+    expect(screen.getByRole('button', { name: '查看 PA3 context' }).dataset.anchorState).toBeUndefined()
+    fireEvent.click(anchorButton)
+    expect(active.cancelAnchor).toHaveBeenCalledTimes(1)
   })
 
   it('keeps Context Tray compact until expanded, then exposes PA ordering controls', () => {
@@ -325,7 +381,7 @@ describe('graph UI', () => {
     expect(fixture.setComposerBlocked).not.toHaveBeenCalledWith(true)
   })
 
-  it('previews a clicked PA as a green dashed candidate, then Add commits it', async () => {
+  it('inspects a clicked PA without changing Context, then Add commits it', async () => {
     const fixture = graphViewFixture(state)
     const view = renderGraphView(fixture)
     await vi.waitFor(() => expect(screen.getByRole('button', { name: '查看 PA1 context' }).getAttribute('data-selection-state')).toBe('selected'))
@@ -333,22 +389,17 @@ describe('graph UI', () => {
     const pa3 = screen.getByRole('button', { name: '查看 PA3 context' })
     fireEvent.click(pa3)
 
-    expect(pa3.getAttribute('data-selection-state')).toBe('candidate')
-    expect(pa3.getAttribute('aria-pressed')).toBe('mixed')
+    expect(pa3.getAttribute('data-selection-state')).toBe('unselected')
+    expect(pa3.getAttribute('aria-pressed')).toBe('false')
     expect(screen.getByLabelText('PA Context Window')).toBeTruthy()
     expect(screen.getByText('PA-ca11d')).toBeTruthy()
-    expect(screen.getByText('2 已加入 + 1 预览')).toBeTruthy()
+    expect(screen.getByText('2 已加入')).toBeTruthy()
     expect([...view.container.querySelectorAll('.dsh-git-rail-dash')]
       .map(item => item.getAttribute('data-rail-state')))
-      .toEqual(['included', 'included', 'preview'])
-    // The compact PA rail carries the candidate state, and the tray shows the dashed chip.
-    expect(within(screen.getByLabelText('Context Tray')).getByText('PA3')).toBeTruthy()
-    expect(screen.getByLabelText('Context Tray').querySelector('[data-preview="candidate"]')).toBeTruthy()
-    await vi.waitFor(() => {
-      expect(screen.getByLabelText('PA3 · 虚线预览').getAttribute('data-preview-state')).toBe('candidate')
-      expect(screen.getByText('虚线预览')).toBeTruthy()
-    })
-    // A merely unmerged Context leaves the official composer typable.
+      .toEqual(['included', 'included'])
+    expect(within(screen.getByLabelText('Context Tray')).queryByText('PA3')).toBeNull()
+    expect(screen.getByLabelText('Context Tray').querySelector('[data-preview="candidate"]')).toBeNull()
+    // Read-only inspection leaves the official composer and Context unchanged.
     expect(fixture.setComposerBlocked).not.toHaveBeenCalledWith(true)
 
     fireEvent.click(screen.getByRole('button', { name: '关闭 PA Context Window' }))
@@ -370,40 +421,36 @@ describe('graph UI', () => {
     expect(screen.getByRole('button', { name: '移出 Context' })).toBeTruthy()
   })
 
-  it('reorders the dashed preview before it is added, and commits it in that place', async () => {
+  it('adds an inspected PA, then reorders the committed Context', async () => {
     const fixture = graphViewFixture(state)
     const view = renderGraphView(fixture)
     await vi.waitFor(() => expect(screen.getByRole('button', { name: '查看 PA1 context' }).getAttribute('data-selection-state')).toBe('selected'))
 
     fireEvent.click(screen.getByRole('button', { name: '查看 PA3 context' }))
+    fireEvent.click(screen.getByRole('button', { name: '加入 Context' }))
     const chipLabels = () => [...screen.getByLabelText('Context Tray').querySelectorAll('.dsh-git-chip')]
       .map(chip => chip.textContent?.replace(/[⠿⌁‹›×]|预览/g, '') ?? '')
     expect(chipLabels()).toEqual(['PA1', 'PA2', 'PA3'])
 
     fireEvent.click(screen.getByRole('button', { name: '将 PA3 向前移动' }))
     expect(chipLabels()).toEqual(['PA1', 'PA3', 'PA2'])
-    expect(screen.getByLabelText('Context Tray').querySelector('[data-preview="candidate"]')?.textContent).toContain('PA3')
-    // The moved preview stays a preview: still dashed in the history, still uncounted.
-    expect(screen.getByText('2 已加入 + 1 预览')).toBeTruthy()
+    expect(screen.getByLabelText('Context Tray').querySelector('[data-preview="candidate"]')).toBeNull()
+    expect(screen.getByText('3 已加入')).toBeTruthy()
     await vi.waitFor(() => {
       const rail = [...view.container.querySelectorAll('.dsh-git-rail-dash')]
       expect(rail.map(item => item.getAttribute('data-node-id'))).toEqual([one.id, three.id, two.id])
-      expect(rail.map(item => item.getAttribute('data-rail-state'))).toEqual(['included', 'preview', 'included'])
+      expect(rail.map(item => item.getAttribute('data-rail-state'))).toEqual(['included', 'included', 'included'])
       const history = [...view.container.querySelectorAll('.dsh-git-preview-turn')]
       expect(history.map(item => item.getAttribute('data-node-id'))).toEqual([one.id, three.id, two.id])
-      expect(history.map(item => item.getAttribute('data-preview-state'))).toEqual(['selected', 'candidate', 'selected'])
+      expect(history.map(item => item.getAttribute('data-preview-state'))).toEqual(['selected', 'selected', 'selected'])
     })
 
-    const candidateDash = view.container.querySelector(`.dsh-git-rail-dash[data-node-id="${three.id}"]`) as HTMLElement
-    fireEvent.pointerEnter(candidateDash)
-    expect(candidateDash.getAttribute('data-active')).toBe('')
+    const movedDash = view.container.querySelector(`.dsh-git-rail-dash[data-node-id="${three.id}"]`) as HTMLElement
+    fireEvent.pointerEnter(movedDash)
+    expect(movedDash.getAttribute('data-active')).toBe('')
     expect(view.container.querySelector(`.dsh-git-preview-turn[data-node-id="${three.id}"]`)?.getAttribute('data-rail-active')).toBe('')
     fireEvent.pointerLeave(view.container.querySelector('.dsh-git-rail') as HTMLElement)
     expect(view.container.querySelector(`.dsh-git-preview-turn[data-node-id="${three.id}"]`)?.getAttribute('data-rail-active')).toBeNull()
-
-    fireEvent.click(screen.getByRole('button', { name: '加入 Context' }))
-    expect(chipLabels()).toEqual(['PA1', 'PA3', 'PA2'])
-    expect(screen.getByLabelText('Context Tray').querySelector('[data-preview="candidate"]')).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: 'Merge' }))
     await vi.waitFor(() => expect(fixture.createMergedSession).toHaveBeenCalledWith(
@@ -434,6 +481,7 @@ describe('graph UI', () => {
     renderGraphView(fixture)
     await vi.waitFor(() => expect(screen.getByRole('button', { name: '查看 PA3 context' })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: '查看 PA3 context' }))
+    fireEvent.click(screen.getByRole('button', { name: '加入 Context' }))
 
     await vi.waitFor(() => expect(screen.getByRole('button', { name: '放弃更改并发送' })).toBeTruthy())
     expect(fixture.setComposerBlocked).not.toHaveBeenCalledWith(true)
@@ -450,6 +498,7 @@ describe('graph UI', () => {
     renderGraphView(fixture)
     await vi.waitFor(() => expect(screen.getByRole('button', { name: '查看 PA3 context' })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: '查看 PA3 context' }))
+    fireEvent.click(screen.getByRole('button', { name: '加入 Context' }))
 
     fireEvent.click(screen.getByRole('button', { name: '放弃更改并发送' }))
 
@@ -493,7 +542,7 @@ describe('graph UI', () => {
     localeSnapshot = { active: 'en', revision: 1 }
     act(() => { for (const listener of listeners) listener() })
     expect(screen.getByText('Included')).toBeTruthy()
-    expect(screen.getByText('Preview')).toBeTruthy()
+    expect(screen.queryByText('Preview')).toBeNull()
     expect(screen.getByText(/2 PA · About \d+ tokens/)).toBeTruthy()
   })
 

@@ -15,6 +15,8 @@ export type BranchId = string
 /** One immutable Prompt + Answer commit in the conversation DAG. */
 export interface TurnNode {
   readonly id: TurnNodeId
+  /** Durable label retained when an Anchor Workspace imports a source PA. */
+  readonly displayLabel?: string | undefined
   readonly sessionId: string
   readonly turn: number
   readonly prompt: string
@@ -49,6 +51,17 @@ export interface PendingMerge {
   readonly prompt?: string | undefined
 }
 
+/** Durable strict-isolation binding for one source Session's anchor mode. */
+export interface AnchorModeState {
+  readonly sourceSessionId: string
+  /** Frozen included PAs; preview candidates are deliberately excluded. */
+  readonly nodeIds: readonly TurnNodeId[]
+  readonly workspaceId: string
+  readonly workspacePath: string
+  readonly workspaceTitle: string
+  readonly createdAt: number
+}
+
 /**
  * One scope's complete ledger: the DAG, its branches, and the view state.
  *
@@ -64,6 +77,8 @@ export interface GraphState {
   readonly sessionBranches: Readonly<Record<string, BranchId>>
   readonly sessionTurnRefs: Readonly<Record<string, Readonly<Record<number, TurnNodeId>>>>
   readonly pendingMerges: Readonly<Record<string, PendingMerge>>
+  /** Active anchor modes, keyed by the source Session that dispatches questions. */
+  readonly anchors: Readonly<Record<string, AnchorModeState>>
   readonly headNodeId: TurnNodeId | null
   readonly previewNodeId: TurnNodeId | null
   readonly contextManifest: readonly TurnNodeId[]
@@ -77,6 +92,7 @@ export const EMPTY_GRAPH_STATE: GraphState = {
   sessionBranches: {},
   sessionTurnRefs: {},
   pendingMerges: {},
+  anchors: {},
   headNodeId: null,
   previewNodeId: null,
   contextManifest: [],

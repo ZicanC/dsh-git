@@ -12,6 +12,8 @@ export interface ContextTrayProps {
   readonly orderedIds: readonly TurnNodeId[]
   readonly candidateId: TurnNodeId | null
   readonly busy: boolean
+  readonly anchored?: boolean
+  readonly anchorWorkspaceTitle?: string | undefined
   readonly error: string | null
   readonly dirty: boolean
   readonly draftHasContent: boolean
@@ -28,7 +30,8 @@ export interface ContextTrayProps {
 
 /** Draggable ordered PA selection. The resident DSH composer remains below it. */
 export function ContextTray({
-  state, selectedIds, orderedIds, candidateId, busy, error, dirty, overLimit,
+  state, selectedIds, orderedIds, candidateId, busy, anchored = false, anchorWorkspaceTitle,
+  error, dirty, overLimit,
   onMove, onMoveEnd, onRemove, onMerge,
 }: ContextTrayProps) {
   const locale = useLocale()
@@ -42,7 +45,7 @@ export function ContextTray({
   // second Session make the new Chat a Merge. The preview counts, so the
   // action names what it would become.
   const action = joinsLineages(state, orderedIds) ? 'Merge' : 'Fork'
-  const canMerge = !busy && !overLimit && selectedIds.length > 0 && candidateId === null
+  const canMerge = !anchored && !busy && !overLimit && selectedIds.length > 0 && candidateId === null
   const forcedExpanded = dirty || candidateId !== null || error !== null
   const expanded = forcedExpanded || expandedByUser
 
@@ -56,6 +59,7 @@ export function ContextTray({
         <span className="dsh-git-muted dsh-git-tray-meta">
           {selectedIds.length} PA{previewId === null ? '' : localized(' + 1 预览', ' + 1 preview', locale)}
           {' · '}{localized('约', 'About', locale)} {estimateTokens(selectionState, selectedIds)} tokens
+          {anchored ? localized(' · 已锚定', ' · anchored', locale) : ''}
         </span>
       </div>
       <div className="dsh-git-tray-actions">
@@ -63,7 +67,12 @@ export function ContextTray({
           className="dsh-git-button dsh-git-button-primary dsh-git-tray-merge"
           type="button"
           disabled={!canMerge}
-          title={candidateId !== null
+          title={anchored
+            ? localized(
+              `Context 已固定到「${anchorWorkspaceTitle ?? ''}」；请在 Conversation Graph 取消锚点。`,
+              `Context is fixed to “${anchorWorkspaceTitle ?? ''}”; cancel it in Conversation Graph.`, locale,
+            )
+            : candidateId !== null
             ? localized('请先加入或关闭绿色候选 PA。', 'Add or close the green candidate PA first.', locale)
             : overLimit
               ? localized(`所选 PA 数量超过单次 ${action} 上限。`, `The selection exceeds the per-${action} limit.`, locale)
@@ -72,7 +81,7 @@ export function ContextTray({
                 : localized('当前选择来自多个 Session：新 Chat 会 Merge 这些 PA。', 'The selection spans Sessions: the new Chat merges those PAs.', locale)}
           onClick={() => { void onMerge().catch(() => {}) }}
         >
-          {busy ? localized('正在创建…', 'Creating…', locale) : action}
+          {anchored ? localized('已锚定', 'Anchored', locale) : busy ? localized('正在创建…', 'Creating…', locale) : action}
         </button>
         <button
           className="dsh-git-tray-toggle"
@@ -111,7 +120,7 @@ export function ContextTray({
           const preview = nodeId === previewId
           return <span
             className={preview ? 'dsh-git-chip dsh-git-chip-candidate' : 'dsh-git-chip'}
-            draggable={!busy}
+            draggable={!busy && !anchored}
             key={nodeId}
             title={node.prompt}
             data-preview={preview ? 'candidate' : undefined}
@@ -133,7 +142,7 @@ export function ContextTray({
             {preview ? <span className="dsh-git-chip-tag">{localized('预览', 'preview', locale)}</span> : null}
             <button
               type="button"
-              disabled={busy || index === 0}
+              disabled={busy || anchored || index === 0}
               aria-label={localized(`将 ${label} 向前移动`, `Move ${label} earlier`, locale)}
               onClick={() => {
                 const previousId = orderedIds[index - 1]
@@ -142,7 +151,7 @@ export function ContextTray({
             >‹</button>
             <button
               type="button"
-              disabled={busy || index === orderedIds.length - 1}
+              disabled={busy || anchored || index === orderedIds.length - 1}
               aria-label={localized(`将 ${label} 向后移动`, `Move ${label} later`, locale)}
               onClick={() => {
                 const afterNextId = orderedIds[index + 2]
@@ -152,7 +161,7 @@ export function ContextTray({
             >›</button>
             <button
               type="button"
-              disabled={busy}
+              disabled={busy || anchored}
               aria-label={preview
                 ? localized(`关闭 ${label} 预览`, `Close the ${label} preview`, locale)
                 : localized(`移除 ${label}`, `Remove ${label}`, locale)}

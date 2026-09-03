@@ -127,6 +127,55 @@ describe('GraphRepository', () => {
     expect(state.pendingMerges.child).toBeUndefined()
   })
 
+  it('creates a fork marker before the first new PA for a single lineage parent', () => {
+    const repository = new GraphRepository()
+    repository.syncSession('source', [turn(1), turn(2)])
+    const before = repository.getSnapshot()
+    const one = before.sessionTurnRefs.source![1]!
+    const two = before.sessionTurnRefs.source![2]!
+
+    repository.prepareMergedSession({
+      childSessionId: 'child',
+      importedNodeIds: [one, two],
+      parentIds: [two],
+      primaryParentId: two,
+      contextManifest: [one, two],
+    })
+
+    const prepared = repository.getSnapshot()
+    const markerId = prepared.sessionTurnRefs.child![2]!
+    const marker = prepared.nodes[markerId]!
+    expect(prepared.sessionTurnRefs.child![1]).toBe(one)
+    expect(markerId).not.toBe(two)
+    expect(marker).toMatchObject({
+      sessionId: 'child',
+      turn: 2,
+      prompt: 'q2',
+      answer: 'a2',
+      primaryParentId: null,
+      parentIds: [],
+      forkSourceId: two,
+    })
+    expect(marker.contextManifest).toEqual(before.nodes[two]!.contextManifest)
+    expect(nodeLabelMap(prepared).get(markerId)).toBe('PA2 fork')
+    expect(prepared.branches[prepared.sessionBranches.child!]?.headId).toBe(markerId)
+    expect(prepared.pendingMerges.child).toMatchObject({
+      parentIds: [markerId],
+      primaryParentId: markerId,
+      contextManifest: [one, two],
+    })
+
+    repository.syncSession('child', [turn(1), turn(2), turn(3, 30)])
+
+    const state = repository.getSnapshot()
+    const firstOwn = state.nodes[state.sessionTurnRefs.child![3]!]!
+    expect(state.sessionTurnRefs.child![2]).toBe(markerId)
+    expect(firstOwn.parentIds).toEqual([markerId])
+    expect(firstOwn.primaryParentId).toBe(markerId)
+    expect(firstOwn.contextManifest).toEqual([one, two])
+    expect(state.pendingMerges.child).toBeUndefined()
+  })
+
   it('ignores a deprecated pending prompt when the merged Session sends its first new turn', async () => {
     const seeded = new GraphRepository()
     seeded.syncSession('source', [turn(1)])
@@ -171,7 +220,8 @@ describe('GraphRepository', () => {
     const forkNext = state.sessionTurnRefs.child![3]!
     expect(forkOne).toBe(sourceOne)
     expect(state.nodes[forkTip]?.forkSourceId).toBe(sourceTwo)
-    expect(state.nodes[forkTip]?.primaryParentId).toBe(sourceOne)
+    expect(state.nodes[forkTip]?.primaryParentId).toBeNull()
+    expect(state.nodes[forkTip]?.parentIds).toEqual([])
     expect(state.nodes[forkNext]?.parentIds).toEqual([forkTip])
     const labels = nodeLabelMap(state)
     expect(labels.get(forkTip)).toBe('PA2 fork')
@@ -186,5 +236,43 @@ describe('GraphRepository', () => {
     const branchId = repository.getSnapshot().sessionBranches.s1!
     repository.renameBranch(branchId, 'research-line')
     expect(repository.getSnapshot().branches[branchId]?.name).toBe('research-line')
+  })
+
+  it('freezes and cancels an Anchor Workspace binding without changing graph nodes', () => {
+    const repository = new GraphRepository()
+    repository.syncSession('s1', [turn(1), turn(2)])
+    const before = repository.getSnapshot()
+    const nodeIds = [before.sessionTurnRefs.s1![1]!, before.sessionTurnRefs.s1![2]!]
+
+    repository.activateAnchor('s1', {
+      sourceSessionId: 's1',
+      nodeIds,
+      workspaceId: 'anchor-workspace',
+      workspacePath: '/workspace/dsh-git-anchors-one',
+      workspaceTitle: 'Anchored questions',
+      createdAt: 50,
+    })
+
+    expect(repository.getSnapshot().anchors.s1).toMatchObject({
+      nodeIds,
+      workspaceId: 'anchor-workspace',
+    })
+    expect(repository.getSnapshot().nodes).toEqual(before.nodes)
+    repository.cancelAnchor('s1')
+    expect(repository.getSnapshot().anchors.s1).toBeUndefined()
+    expect(repository.getSnapshot().nodes).toEqual(before.nodes)
+  })
+
+  it('refuses an anchor whose fixed PA is stale', () => {
+    const repository = new GraphRepository()
+    repository.activateAnchor('s1', {
+      sourceSessionId: 's1',
+      nodeIds: ['missing'],
+      workspaceId: 'anchor-workspace',
+      workspacePath: '/workspace/dsh-git-anchors-one',
+      workspaceTitle: 'Anchored questions',
+      createdAt: 50,
+    })
+    expect(repository.getSnapshot().anchors).toEqual({})
   })
 })

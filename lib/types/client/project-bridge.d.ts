@@ -7,6 +7,7 @@ export interface ProjectBridgeServices {
     readonly sessions: ISessions;
     readonly workspaces: IWorkspaces;
     readonly repositoryForWorkspace: (workspaceId: string) => GraphRepository;
+    readonly repositoryForSession: (sessionId: string) => GraphRepository;
     readonly locale: LocaleSource;
 }
 /** Install the isolated compatibility layer and return its complete disposer. */

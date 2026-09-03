@@ -5,8 +5,21 @@ import type { GraphState, TurnNodeId } from './types.ts'
 export function nodeLabelMap(state: GraphState): ReadonlyMap<TurnNodeId, string> {
   const labels = new Map<TurnNodeId, string>()
   const nodes = orderedNodes(state)
-  for (const [index, node] of nodes.filter(candidate => candidate.forkSourceId === undefined).entries()) {
-    labels.set(node.id, `PA${index + 1}`)
+  const ordinary = nodes.filter(candidate => candidate.forkSourceId === undefined)
+  const reserved = new Set<number>()
+  for (const node of ordinary) {
+    if (node.displayLabel === undefined) continue
+    labels.set(node.id, node.displayLabel)
+    const match = /^PA([1-9]\d*)(?: fork)?$/.exec(node.displayLabel)
+    if (match !== null) reserved.add(Number(match[1]))
+  }
+  let next = reserved.size === 0 ? 1 : Math.max(...reserved) + 1
+  for (const node of ordinary) {
+    if (labels.has(node.id)) continue
+    while (reserved.has(next)) next += 1
+    labels.set(node.id, `PA${next}`)
+    reserved.add(next)
+    next += 1
   }
   for (const node of nodes) {
     if (node.forkSourceId === undefined) continue

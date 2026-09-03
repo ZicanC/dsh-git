@@ -1,5 +1,5 @@
 import type { GraphTransport } from './graph-transport.ts';
-import type { BranchId, GraphState, ImportedTurn, PrepareMergedSessionInput, TurnNodeId } from './types.ts';
+import type { AnchorModeState, BranchId, GraphState, ImportedTurn, PrepareMergedSessionInput, TurnNodeId } from './types.ts';
 /**
  * Observable owning one scope's conversation DAG, durable on the Host.
  *
@@ -61,6 +61,10 @@ export declare class GraphRepository {
     private prepareMergedSessionNow;
     /** Remove pending metadata for an abandoned merged Session. */
     abortPending(sessionId: string): void;
+    /** Freeze one source Session's selected context into an Anchor Workspace. */
+    activateAnchor(sessionId: string, anchor: AnchorModeState): void;
+    /** Leave anchor mode after the Host has cleaned up any unused Workspace. */
+    cancelAnchor(sessionId: string): void;
     /** Toggle one node in the context tray; additions restore creation-time order. */
     toggleContext(nodeId: TurnNodeId): void;
     /** Remove all nodes from the next-request tray. */

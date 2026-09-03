@@ -13,6 +13,28 @@ export declare function missingDirectDependencies(state: GraphState, manifest: r
  * pulled from a second Session make the new Chat a Merge.
  */
 export declare function joinsLineages(state: GraphState, manifest: readonly TurnNodeId[]): boolean;
+/** Resolve every visual fork copy to the original PA identity it represents. */
+export declare function paIdentityId(state: GraphState, nodeId: TurnNodeId): TurnNodeId;
+/**
+ * Keep one occurrence per PA identity without moving its original Tray slot.
+ *
+ * Selecting another fork copy replaces the occurrence stored in that slot;
+ * it never adds a second copy of the same PA to the outgoing Context.
+ */
+export declare function normalizeContextOccurrences(state: GraphState, manifest: readonly TurnNodeId[]): readonly TurnNodeId[];
+/** Parent endpoints derived from one ordered Context Tray snapshot. */
+export interface LineageParentPlan {
+    readonly parentIds: readonly TurnNodeId[];
+    readonly primaryParentId: TurnNodeId | null;
+}
+/**
+ * Keep only the last selected PA from each source Session.
+ *
+ * The surviving endpoints retain the order of their own final Tray positions,
+ * rather than the order in which their Sessions first appeared. The final
+ * surviving endpoint is therefore also the layout-primary parent.
+ */
+export declare function lineageParentPlan(state: GraphState, manifest: readonly TurnNodeId[]): LineageParentPlan;
 /** Assign stable lanes and parent edges for a compact GitLens-style graph. */
 export declare function layoutGraph(state: GraphState): GraphLayout;
 /** Estimate prompt tokens without coupling the browser plugin to a tokenizer. */

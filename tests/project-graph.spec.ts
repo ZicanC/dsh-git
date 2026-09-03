@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { assembleProjectGraph, projectGraphAt } from '../src/client/project-graph.ts'
+import {
+  assembleProjectGraph, projectGraphAt, restoreAnchorSourceLabels,
+} from '../src/client/project-graph.ts'
+import { nodeLabelMap } from '../src/client/labels.ts'
 import { graph, node } from './fixtures.ts'
 import type { ProjectGraphResponse, ProjectTurnDTO } from '../src/protocol.ts'
 
@@ -37,7 +40,8 @@ describe('project graph assembly', () => {
     const sourceTip = model.state.sessionTurnRefs.root?.[2] ?? ''
     expect(forkTip).not.toBe(sourceTip)
     expect(model.nodes[forkTip]?.forkSourceId).toBe(sourceTip)
-    expect(model.nodes[forkTip]?.primaryParentId).toBe(model.state.sessionTurnRefs.root?.[1])
+    expect(model.nodes[forkTip]?.primaryParentId).toBeNull()
+    expect(model.nodes[forkTip]?.parentIds).toEqual([])
     const third = model.nodes[model.state.sessionTurnRefs.fork?.[3] ?? '']!
     expect(third.parentIds).toEqual([forkTip])
     expect(third.firstInSession).toBe(true)
@@ -140,6 +144,233 @@ describe('project graph assembly', () => {
     expect(firstOwn.parentIds).toEqual([sourceA, sourceB])
     expect(firstOwn.primaryParentId).toBe(sourceB)
     expect(firstOwn.contextManifest).toEqual([sourceA, sourceB])
+  })
+
+  it('projects a legacy single-source composed Session through one explicit fork occurrence', () => {
+    const response: ProjectGraphResponse = {
+      workspaceId: 'w',
+      sessions: [
+        { sessionId: 'source', createdAt: 1, seedLength: 0, turns: [
+          turn({ turn: 1, fingerprint: 'one', boundarySeq: 5 }),
+          turn({ turn: 2, fingerprint: 'two', boundarySeq: 10 }),
+          turn({ turn: 3, fingerprint: 'three', boundarySeq: 15 }),
+        ] },
+        {
+          sessionId: 'dsh-git-single-source', createdAt: 40, parentSessionId: 'source', seedLength: 20,
+          mergeSources: [
+            { sourceSessionId: 'source', sourceTurn: 1, sourceBoundarySeq: 5, targetTurn: 1 },
+            { sourceSessionId: 'source', sourceTurn: 2, sourceBoundarySeq: 10, targetTurn: 2 },
+            { sourceSessionId: 'source', sourceTurn: 3, sourceBoundarySeq: 15, targetTurn: 3 },
+          ],
+          turns: [
+            turn({ turn: 1, fingerprint: 'one', boundarySeq: 4, inherited: true }),
+            turn({ turn: 2, fingerprint: 'two', boundarySeq: 8, inherited: true }),
+            turn({ turn: 3, fingerprint: 'three', boundarySeq: 12, inherited: true }),
+            turn({ turn: 4, fingerprint: 'own', boundarySeq: 20 }),
+          ],
+        },
+      ],
+    }
+
+    const model = assembleProjectGraph(response, graph([]))
+    const source = model.state.sessionTurnRefs.source!
+    const child = model.state.sessionTurnRefs['dsh-git-single-source']!
+    const marker = model.nodes[child[3]!]!
+    const firstOwn = model.nodes[child[4]!]!
+
+    expect(child[1]).toBe(source[1])
+    expect(child[2]).toBe(source[2])
+    expect(child[3]).not.toBe(source[3])
+    expect(child[3]).toBe('project-fork:dsh-git-single-source:3')
+    expect(marker).toMatchObject({
+      sessionId: 'dsh-git-single-source', turn: 3,
+      forkSourceId: source[3], primaryParentId: null, parentIds: [],
+    })
+    expect(firstOwn.parentIds).toEqual([child[3]])
+    expect(firstOwn.primaryParentId).toBe(child[3])
+    expect(firstOwn.contextManifest).toEqual([source[1], source[2], source[3]])
+    expect(model.timeline).toHaveLength(4)
+    expect(nodeLabelMap(model.state).get(child[3]!)).toBe(`${nodeLabelMap(model.state).get(source[3]!)} fork`)
+  })
+
+  it('reuses the repository fork marker when projecting a single-source composed Session', () => {
+    const sourceOne = node({ id: 'source-one', sessionId: 'source', turn: 1, boundarySeq: 5, createdAt: 10 })
+    const sourceTwo = node({
+      id: 'source-two', sessionId: 'source', turn: 2, boundarySeq: 10, createdAt: 20,
+      primaryParentId: sourceOne.id, parentIds: [sourceOne.id],
+    })
+    const marker = node({
+      id: 'repository-fork-marker', sessionId: 'dsh-git-single-source', turn: 2,
+      boundarySeq: 10, createdAt: 20.001, forkSourceId: sourceTwo.id,
+      primaryParentId: null, parentIds: [],
+    })
+    const firstOwn = node({
+      id: 'child-own', sessionId: 'dsh-git-single-source', turn: 3,
+      boundarySeq: 15, createdAt: 30, primaryParentId: marker.id, parentIds: [marker.id],
+      contextManifest: [sourceOne.id, sourceTwo.id],
+    })
+    const local = graph([sourceOne, sourceTwo, marker, firstOwn], {
+      sessionTurnRefs: {
+        source: { 1: sourceOne.id, 2: sourceTwo.id },
+        'dsh-git-single-source': { 1: sourceOne.id, 2: marker.id, 3: firstOwn.id },
+      },
+    })
+    const response: ProjectGraphResponse = {
+      workspaceId: 'w',
+      sessions: [
+        { sessionId: 'source', createdAt: 1, seedLength: 0, turns: [
+          turn({ turn: 1, fingerprint: 'one', boundarySeq: 5 }),
+          turn({ turn: 2, fingerprint: 'two', boundarySeq: 10 }),
+        ] },
+        {
+          sessionId: 'dsh-git-single-source', createdAt: 25, parentSessionId: 'source', seedLength: 10,
+          mergeSources: [
+            { sourceSessionId: 'source', sourceTurn: 1, sourceBoundarySeq: 5, targetTurn: 1 },
+            { sourceSessionId: 'source', sourceTurn: 2, sourceBoundarySeq: 10, targetTurn: 2 },
+          ],
+          turns: [
+            turn({ turn: 1, fingerprint: 'one', boundarySeq: 4, inherited: true }),
+            turn({ turn: 2, fingerprint: 'two', boundarySeq: 8, inherited: true }),
+            turn({ turn: 3, fingerprint: 'own', boundarySeq: 15 }),
+          ],
+        },
+      ],
+    }
+
+    const model = assembleProjectGraph(response, local)
+    const child = model.state.sessionTurnRefs['dsh-git-single-source']!
+
+    expect(child[2]).toBe(marker.id)
+    expect(model.nodes[marker.id]).toMatchObject({
+      forkSourceId: sourceTwo.id, primaryParentId: null, parentIds: [],
+    })
+    expect(model.nodes[firstOwn.id]?.parentIds).toEqual([marker.id])
+    expect(Object.keys(model.nodes).some(id => id.startsWith('project-fork:dsh-git-single-source:'))).toBe(false)
+  })
+
+  it('uses only each source Session terminal as a merge parent while retaining full Context', () => {
+    const response: ProjectGraphResponse = {
+      workspaceId: 'w',
+      sessions: [
+        { sessionId: 'source-a', createdAt: 1, seedLength: 0, turns: [
+          turn({ turn: 1, fingerprint: 'a1', boundarySeq: 5 }),
+          turn({ turn: 2, fingerprint: 'a2', boundarySeq: 10 }),
+        ] },
+        { sessionId: 'source-b', createdAt: 2, seedLength: 0, turns: [
+          turn({ turn: 1, fingerprint: 'b1', boundarySeq: 7 }),
+        ] },
+        {
+          sessionId: 'dsh-git-multi-source', createdAt: 3, parentSessionId: 'source-a', seedLength: 20,
+          mergeSources: [
+            { sourceSessionId: 'source-a', sourceTurn: 2, sourceBoundarySeq: 10, targetTurn: 3 },
+            { sourceSessionId: 'source-a', sourceTurn: 1, sourceBoundarySeq: 5, targetTurn: 1 },
+            { sourceSessionId: 'source-b', sourceTurn: 1, sourceBoundarySeq: 7, targetTurn: 2 },
+          ],
+          turns: [
+            turn({ turn: 1, fingerprint: 'a1', boundarySeq: 4, inherited: true }),
+            turn({ turn: 2, fingerprint: 'b1', boundarySeq: 8, inherited: true }),
+            turn({ turn: 3, fingerprint: 'a2', boundarySeq: 12, inherited: true }),
+            turn({ turn: 4, fingerprint: 'merged-own', boundarySeq: 16 }),
+          ],
+        },
+      ],
+    }
+
+    const model = assembleProjectGraph(response, graph([]))
+    const a1 = model.state.sessionTurnRefs['source-a']?.[1]
+    const a2 = model.state.sessionTurnRefs['source-a']?.[2]
+    const b1 = model.state.sessionTurnRefs['source-b']?.[1]
+    const firstOwn = model.nodes[model.state.sessionTurnRefs['dsh-git-multi-source']?.[4] ?? '']!
+
+    expect(firstOwn.parentIds).toEqual([b1, a2])
+    expect(firstOwn.primaryParentId).toBe(a2)
+    expect(firstOwn.contextManifest).toEqual([a1, b1, a2])
+    expect(Object.keys(model.nodes).some(id => id.startsWith('project-fork:dsh-git-multi-source:'))).toBe(false)
+  })
+
+  it('shares original anchor PAs while keeping every anchored Session parallel', () => {
+    const anchorSources = [
+      { sourceSessionId: 'source', sourceTurn: 2, sourceBoundarySeq: 20, targetTurn: 1, sourceLabel: 'PA3' },
+      { sourceSessionId: 'source', sourceTurn: 5, sourceBoundarySeq: 50, targetTurn: 2, sourceLabel: 'PA7' },
+    ]
+    const anchored = (sessionId: string, createdAt: number, suffix: string) => ({
+      sessionId,
+      createdAt,
+      parentSessionId: 'source',
+      seedLength: 10,
+      mergeSources: anchorSources,
+      turns: [
+        turn({ turn: 1, fingerprint: 'anchor-two', boundarySeq: 4, inherited: true,
+          prompt: 'original prompt two', answer: 'original code two' }),
+        turn({ turn: 2, fingerprint: 'anchor-five', boundarySeq: 8, inherited: true,
+          prompt: 'original prompt five', answer: 'original code five' }),
+        turn({ turn: 3, fingerprint: `${suffix}-one`, boundarySeq: 12 }),
+        turn({ turn: 4, fingerprint: `${suffix}-two`, boundarySeq: 16 }),
+      ],
+    })
+    const response: ProjectGraphResponse = {
+      workspaceId: 'anchor-workspace',
+      sessions: [
+        anchored('dsh-git-anchor-a', 100, 'a'),
+        anchored('dsh-git-anchor-b', 200, 'b'),
+      ],
+    }
+
+    const model = assembleProjectGraph(response, graph([]))
+    const a = model.state.sessionTurnRefs['dsh-git-anchor-a']!
+    const b = model.state.sessionTurnRefs['dsh-git-anchor-b']!
+
+    expect(a[1]).toBe(b[1])
+    expect(a[2]).toBe(b[2])
+    expect(model.nodes[a[1]!]!).toMatchObject({
+      sessionId: 'source', turn: 2, boundarySeq: 20,
+      prompt: 'original prompt two', answer: 'original code two', displayLabel: 'PA3',
+    })
+    expect(model.nodes[a[2]!]!).toMatchObject({
+      sessionId: 'source', turn: 5, boundarySeq: 50,
+      prompt: 'original prompt five', answer: 'original code five', displayLabel: 'PA7',
+    })
+    expect(model.nodes[a[3]!]!.parentIds).toEqual([a[2]])
+    expect(model.nodes[b[3]!]!.parentIds).toEqual([a[2]])
+    expect(model.nodes[a[3]!]!.contextManifest).toEqual([a[1], a[2]])
+    expect(model.nodes[b[3]!]!.contextManifest).toEqual([a[1], a[2]])
+    expect(a[3]).not.toBe(b[3])
+    expect(model.nodes[a[4]!]!.parentIds).toEqual([a[3]])
+    expect(model.nodes[b[4]!]!.parentIds).toEqual([b[3]])
+    expect(model.timeline).toHaveLength(6)
+    expect(model.sessionCount).toBe(2)
+    const labels = nodeLabelMap(model.state)
+    expect(labels.get(a[1]!)).toBe('PA3')
+    expect(labels.get(a[2]!)).toBe('PA7')
+    expect(labels.get(a[3]!)).toBe('S1.1')
+    expect(labels.get(a[4]!)).toBe('S1.2')
+    expect(labels.get(b[3]!)).toBe('S2.1')
+    expect(labels.get(b[4]!)).toBe('S2.2')
+  })
+
+  it('recovers the original PA number for pre-label Anchor Sessions', () => {
+    const one = node({ id: 'one', sessionId: 'source', turn: 1, boundarySeq: 10, createdAt: 10 })
+    const two = node({ id: 'two', sessionId: 'source', turn: 2, boundarySeq: 20, createdAt: 20 })
+    const seven = node({ id: 'seven', sessionId: 'source', turn: 7, boundarySeq: 70, createdAt: 30 })
+    const sourceState = graph([one, two, seven], {
+      sessionTurnRefs: { source: { 1: 'one', 2: 'two', 7: 'seven' } },
+    })
+    const response: ProjectGraphResponse = {
+      workspaceId: 'anchor-workspace',
+      sessions: [{
+        sessionId: 'dsh-git-anchor-old', createdAt: 100, parentSessionId: 'source', seedLength: 5,
+        mergeSources: [{
+          sourceSessionId: 'source', sourceTurn: 7, sourceBoundarySeq: 70, targetTurn: 1,
+        }],
+        turns: [turn({ turn: 1, fingerprint: 'anchor', inherited: true, boundarySeq: 4 })],
+      }],
+    }
+
+    const restored = restoreAnchorSourceLabels(response, new Map([['source', sourceState]]))
+    expect(restored.sessions[0]?.mergeSources?.[0]?.sourceLabel).toBe('PA3')
+    const model = assembleProjectGraph(restored, graph([]))
+    const sourceId = model.state.sessionTurnRefs['dsh-git-anchor-old']?.[1]
+    expect(nodeLabelMap(model.state).get(sourceId!)).toBe('PA3')
   })
 
   it('does not substitute a duplicate fingerprint when an exact merge boundary is stale', () => {

@@ -22,6 +22,8 @@ export interface MergeLineageSource {
     readonly sourceBoundarySeq: number;
     /** Turn number this source occupies in the merged Session. */
     readonly targetTurn: number;
+    /** Original visible PA number retained by Anchor mode. */
+    readonly sourceLabel?: string;
 }
 /**
  * Complete lineage of one merged Session, in Context Tray order.
