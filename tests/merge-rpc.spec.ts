@@ -39,14 +39,18 @@ function boundary(events: readonly SessionEvent[]): number {
 }
 
 describe('trusted merged-session RPC', () => {
-  it('inherits parent, cwd, preset, and Workspace from the final tray source without command events', async () => {
+  it('inherits parent, cwd, effective preset, and Workspace from the final tray source without command events', async () => {
     const first = completedTurn('first-source', 'P1', 'A1')
     const primary = completedTurn('final-source', 'P2', 'A2')
-    const firstEvents = [...first.events]
-    const primaryEvents = [...primary.events]
+    primary.append('agent-preset/selected', { agentPreset: 'final-preset' })
+    const firstEvents = [...first.snapshotEvents()]
+    const primaryEvents = [...primary.snapshotEvents()]
     const snapshots = new Map([
       [first.id, { session: { ...first.header, cwd: '/workspace/first', agentPreset: 'first-preset' }, events: firstEvents }],
-      [primary.id, { session: { ...primary.header, cwd: '/workspace/final', agentPreset: 'final-preset' }, events: primaryEvents }],
+      [primary.id, {
+        session: { ...primary.header, cwd: '/workspace/final', agentPreset: 'creation-preset' },
+        events: primaryEvents,
+      }],
     ])
     const attachFirst = vi.fn(async () => undefined)
     const attachPrimary = vi.fn(async () => undefined)
@@ -82,7 +86,7 @@ describe('trusted merged-session RPC', () => {
       sources: [first, primary].map(session => ({
         sourceSessionId: session.id,
         sourceTurn: 1,
-        sourceBoundarySeq: boundary(session.events),
+        sourceBoundarySeq: boundary(session.snapshotEvents()),
       })),
     }
     const response = await createMergedSession(ctx, request, new AbortController().signal)
@@ -90,10 +94,11 @@ describe('trusted merged-session RPC', () => {
     expect(response).toEqual({ targetSessionId: 'merged-child' })
     expect(create).toHaveBeenCalledTimes(1)
     expect(createOptions?.sessionId).toBe('merged-child')
+    expect(createOptions?.inheritedEventCount).toBe((createOptions?.seed as readonly SessionEvent[]).length)
     expect(createOptions?.meta).toEqual({
       cwd: '/workspace/final',
       parentSession: 'final-source',
-      seedLength: (createOptions?.seed as readonly SessionEvent[]).length,
+      isSeeded: true,
       agentPreset: 'final-preset',
     })
     expect(mount).toHaveBeenCalledWith(agentCtx, 'final-preset')
@@ -110,9 +115,9 @@ describe('trusted merged-session RPC', () => {
     ])
     expect(readMergeLineage(seed)?.sources.map(source => source.sourceSessionId))
       .toEqual(['first-source', 'final-source'])
-    expect(first.events).toEqual(firstEvents)
-    expect(primary.events).toEqual(primaryEvents)
-    expect([...first.events, ...primary.events].some(event =>
+    expect(first.snapshotEvents()).toEqual(firstEvents)
+    expect(primary.snapshotEvents()).toEqual(primaryEvents)
+    expect([...first.snapshotEvents(), ...primary.snapshotEvents()].some(event =>
       event.type === 'command/run' || event.type === 'command/done')).toBe(false)
   })
 
@@ -129,7 +134,7 @@ describe('trusted merged-session RPC', () => {
       sessionQuery: {
         readSession: vi.fn(async () => ({
           session: { ...source.header, cwd: '/workspace/source' },
-          events: [...source.events],
+          events: [...source.snapshotEvents()],
         })),
       },
       workspaceRegistry: {
@@ -142,7 +147,7 @@ describe('trusted merged-session RPC', () => {
       sources: [{
         sourceSessionId: source.id,
         sourceTurn: 1,
-        sourceBoundarySeq: boundary(source.events),
+        sourceBoundarySeq: boundary(source.snapshotEvents()),
       }],
     }, new AbortController().signal)).rejects.toThrow('attach failed')
 
@@ -183,7 +188,7 @@ describe('trusted anchored-session RPC', () => {
       sessionQuery: {
         readSession: vi.fn(async () => ({
           session: { ...source.header, cwd: '/source', agentPreset: 'anchor-preset' },
-          events: [...source.events],
+          events: [...source.snapshotEvents()],
         })),
       },
       workspaceRegistry: {
@@ -202,7 +207,7 @@ describe('trusted anchored-session RPC', () => {
       sources: [{
         sourceSessionId: source.id,
         sourceTurn: 1,
-        sourceBoundarySeq: boundary(source.events),
+        sourceBoundarySeq: boundary(source.snapshotEvents()),
         sourceLabel: 'PA4',
       }],
     }, new AbortController().signal)
@@ -474,7 +479,7 @@ describe('Anchor Workspace project graph', () => {
         }],
       },
       sessionQuery: {
-        readSession: vi.fn(async () => ({ session: child.header, events: [...child.events] })),
+        readSession: vi.fn(async () => ({ session: child.header, inheritedEventCount: child.inheritedEventCount, events: [...child.snapshotEvents()] })),
       },
     } as unknown as Context
 

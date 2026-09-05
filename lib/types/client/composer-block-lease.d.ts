@@ -1,4 +1,4 @@
-import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client';
+import type { SessionId } from '@deepseek-ai/dsh-session';
 import type { IConversation } from '@deepseek-ai/dsh-client-ui-conversation/client';
 /**
  * Own only dsh-git's composer block while coexisting with other blockers.

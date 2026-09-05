@@ -1,5 +1,5 @@
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import { describe, expect, it } from 'vitest'
 import { projectSession, projectTurns } from '../src/project-history.ts'
 import { decodeProjectGraphRequest, decodeProjectGraphResponse } from '../src/protocol.ts'
@@ -18,20 +18,20 @@ describe('project history protocol', () => {
   it('extracts completed PAs, ignores an open turn, and marks the seed prefix', () => {
     const source = Session.create(SessionId('source'))
     completed(source, 1, 'P1', 'A1')
-    const child = Session.create(SessionId('child'), source.events, {
+    const child = Session.create(SessionId('child'), source.snapshotEvents(), {
       version: 0, id: SessionId('child'), createdAt: 100,
-      parentSession: source.id, seedLength: source.events.length,
-    })
+      parentSession: source.id, isSeeded: true,
+    }, SessionLogOffset(source.snapshotEvents().length))
     completed(child, 2, 'P2', 'A2')
     child.append('turn/start', { turn: 3 })
     child.append('user/message', createUserMessage({ content: [{ type: 'text', text: 'open' }], source: { kind: 'user' } }), { surfaceOp: 'append' })
-    const snapshot = { session: child.header, events: [...child.events] }
+    const snapshot = { session: child.header, inheritedEventCount: child.inheritedEventCount, events: [...child.snapshotEvents()] }
     const turns = projectTurns(snapshot)
     expect(turns.map(turn => [turn.turn, turn.prompt, turn.answer, turn.inherited])).toEqual([
       [1, 'P1', 'A1', true],
       [2, 'P2', 'A2', false],
     ])
-    expect(projectSession(snapshot)).toMatchObject({ sessionId: 'child', parentSessionId: 'source', seedLength: source.events.length })
+    expect(projectSession(snapshot)).toMatchObject({ sessionId: 'child', parentSessionId: 'source', seedLength: source.snapshotEvents().length })
     expect(turns[0]?.fingerprint).toHaveLength(64)
   })
 

@@ -43,19 +43,19 @@ describe('Host-side merged history', () => {
     const pa7 = completedTurn('source-pa7', 'P7', 'A7')
     const sessions = new Map([[pa1.id, pa1], [pa7.id, pa7]])
     const seed = await buildMergedSessionSeed('merged-pa9', [
-      { sourceSessionId: pa1.id, sourceTurn: 1, sourceBoundarySeq: turnEndSeq(pa1.events) },
-      { sourceSessionId: pa7.id, sourceTurn: 1, sourceBoundarySeq: turnEndSeq(pa7.events) },
+      { sourceSessionId: pa1.id, sourceTurn: 1, sourceBoundarySeq: turnEndSeq(pa1.snapshotEvents()) },
+      { sourceSessionId: pa7.id, sourceTurn: 1, sourceBoundarySeq: turnEndSeq(pa7.snapshotEvents()) },
     ], async sessionId => {
       const session = sessions.get(sessionId)
       if (session === undefined) throw new Error('missing fixture session')
-      return { session: session.header, events: [...session.events] }
+      return { session: session.header, inheritedEventCount: session.inheritedEventCount, events: [...session.snapshotEvents()] }
     })
 
     expect(seed.filter(event => event.type === 'turn/start').map(event => event.data.turn)).toEqual([1, 2])
     expect(seed.filter(event => event.type === 'turn/end').map(event => event.data.turn)).toEqual([1, 2])
     const merged = Session.create(SessionId('merged-pa9'), seed)
     merged.append('turn/start', { turn: 3 })
-    expect(merged.events.filter(event => event.type === 'turn/start').map(event => event.data.turn)).toEqual([1, 2, 3])
+    expect(merged.snapshotEvents().filter(event => event.type === 'turn/start').map(event => event.data.turn)).toEqual([1, 2, 3])
     expect(merged.deriveMessages().map(message => JSON.stringify(message.content))).toEqual([
       JSON.stringify([{ type: 'text', text: 'P1' }]),
       JSON.stringify([{ type: 'text', text: 'A1' }]),
@@ -69,12 +69,12 @@ describe('Host-side merged history', () => {
     const pa7 = completedTurn('source-pa7', 'P7', 'A7')
     const sessions = new Map([[pa1.id, pa1], [pa7.id, pa7]])
     const seed = await buildMergedSessionSeed('merged-pa9', [
-      { sourceSessionId: pa1.id, sourceTurn: 1, sourceBoundarySeq: turnEndSeq(pa1.events) },
-      { sourceSessionId: pa7.id, sourceTurn: 1, sourceBoundarySeq: turnEndSeq(pa7.events) },
+      { sourceSessionId: pa1.id, sourceTurn: 1, sourceBoundarySeq: turnEndSeq(pa1.snapshotEvents()) },
+      { sourceSessionId: pa7.id, sourceTurn: 1, sourceBoundarySeq: turnEndSeq(pa7.snapshotEvents()) },
     ], async sessionId => {
       const session = sessions.get(sessionId)
       if (session === undefined) throw new Error('missing fixture session')
-      return { session: session.header, events: [...session.events] }
+      return { session: session.header, inheritedEventCount: session.inheritedEventCount, events: [...session.snapshotEvents()] }
     })
 
     const lineage = seed.at(-1)!
@@ -94,11 +94,11 @@ describe('Host-side merged history', () => {
   it('recovers merge lineage through the project graph wire without any browser state', async () => {
     const pa1 = completedTurn('source-pa1', 'P1', 'A1')
     const seed = await buildMergedSessionSeed('merged-pa9', [
-      { sourceSessionId: pa1.id, sourceTurn: 1, sourceBoundarySeq: turnEndSeq(pa1.events) },
-    ], async () => ({ session: pa1.header, events: [...pa1.events] }))
+      { sourceSessionId: pa1.id, sourceTurn: 1, sourceBoundarySeq: turnEndSeq(pa1.snapshotEvents()) },
+    ], async () => ({ session: pa1.header, inheritedEventCount: pa1.inheritedEventCount, events: [...pa1.snapshotEvents()] }))
     const merged = Session.create(SessionId('merged-pa9'), seed)
 
-    const dto = projectSession({ session: merged.header, events: [...merged.events] })
+    const dto = projectSession({ session: merged.header, inheritedEventCount: merged.inheritedEventCount, events: [...merged.snapshotEvents()] })
     expect(dto.mergeSources).toEqual([
       { sourceSessionId: 'source-pa1', sourceTurn: 1, sourceBoundarySeq: 5, targetTurn: 1 },
     ])
@@ -111,9 +111,9 @@ describe('Host-side merged history', () => {
 
   it('leaves an ordinary session without merge lineage', () => {
     const plain = completedTurn('plain', 'P', 'A')
-    const dto = projectSession({ session: plain.header, events: [...plain.events] })
+    const dto = projectSession({ session: plain.header, inheritedEventCount: plain.inheritedEventCount, events: [...plain.snapshotEvents()] })
     expect(dto.mergeSources).toBeUndefined()
-    expect(readMergeLineage(plain.events)).toBeUndefined()
+    expect(readMergeLineage(plain.snapshotEvents())).toBeUndefined()
   })
 
   it('strictly validates the private merge RPC request and response', () => {

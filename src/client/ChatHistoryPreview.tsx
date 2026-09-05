@@ -1,3 +1,4 @@
+import { PreviewMarkdown } from './PreviewMarkdown.tsx'
 import {
   memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode,
 } from 'react'
@@ -8,7 +9,6 @@ import {
   IconChevronDownOutline14,
   IconThinkOutline14,
   JsonBlock,
-  MarkdownText,
   MessageText,
   StateDot,
 } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -207,7 +207,7 @@ function Blocks({
         if (block.text === '') return null
         return mode === 'tool'
           ? <pre className="dsh-git-preview-tool-output" key={key}>{block.text}</pre>
-          : <MarkdownText key={key} text={block.text} />
+          : <PreviewMarkdown key={key} text={block.text} />
       case 'reasoning':
         return block.text === '' ? null : <ReasoningRow key={key} text={block.text} />
       case 'image':

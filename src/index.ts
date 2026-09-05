@@ -1,8 +1,8 @@
 /** Host half: creates a new Agent from multiple selected turns as real session history. */
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
-import { resolveSessionPreset } from '@deepseek-ai/dsh-agent-presets'
-import { SessionId } from '@deepseek-ai/dsh-session'
+import type {} from '@deepseek-ai/dsh-agent-presets'
+import { SessionId, SessionLogOffset, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-query'
 import type {} from '@deepseek-ai/dsh-storage-domain'
 import type { Workspace } from '@deepseek-ai/dsh-workspace'
@@ -89,6 +89,22 @@ function anchorSourceKey(sources: readonly HistoryTurnSource[]): string {
 function isAnchorWorkspaceChild(workspace: Workspace, sourceWorkspace: Workspace): boolean {
   return dirname(workspace.path) === sourceWorkspace.path
     && basename(workspace.path).startsWith('dsh-git-anchors-')
+}
+
+/**
+ * Read the effective preset from the durable session record.
+ *
+ * `agent-preset/selected` supersedes the immutable creation header while a
+ * session is blank. The Harness no longer exports this convenience helper,
+ * and this query snapshot does not expose its projection, so fold the same
+ * small log-backed rule here.
+ */
+function resolveSessionPreset(header: SessionHeader, events: readonly SessionEvent[]): string | undefined {
+  let preset = header.agentPreset
+  for (const event of events) {
+    if (event.type === 'agent-preset/selected') preset = event.data.agentPreset
+  }
+  return preset
 }
 
 /** Recover identity from old markers by reading any existing anchored child lineage. */
@@ -199,14 +215,15 @@ export async function createMergedSession(
 
   const sourceWorkspace = ctx.workspaceRegistry.list()
     .find(workspace => workspace.sessionIds.includes(primarySessionId))
-  const preset = resolveSessionPreset({ header: primary.session, events: primary.events })
+  const preset = resolveSessionPreset(primary.session, primary.events)
   const handle = await ctx.agents.create({
     sessionId: targetSessionId,
     seed,
+    inheritedEventCount: SessionLogOffset(seed.length),
     meta: {
       ...(primary.session.cwd === undefined ? {} : { cwd: primary.session.cwd }),
       parentSession: primarySessionId,
-      seedLength: seed.length,
+      isSeeded: true,
       ...(preset === undefined ? {} : { agentPreset: preset }),
     },
     signal,
@@ -261,14 +278,15 @@ export async function createAnchoredSession(
   const primary = await readSession(primarySessionId)
   const seed = await buildMergedSessionSeed(targetSessionId, request.sources, readSession)
   signal.throwIfAborted()
-  const preset = resolveSessionPreset({ header: primary.session, events: primary.events })
+  const preset = resolveSessionPreset(primary.session, primary.events)
   const handle = await ctx.agents.create({
     sessionId: targetSessionId,
     seed,
+    inheritedEventCount: SessionLogOffset(seed.length),
     meta: {
       cwd: targetWorkspace.path,
       parentSession: primarySessionId,
-      seedLength: seed.length,
+      isSeeded: true,
       ...(preset === undefined ? {} : { agentPreset: preset }),
     },
     signal,

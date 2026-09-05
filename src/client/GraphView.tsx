@@ -1,3 +1,4 @@
+import type {} from '@deepseek-ai/dsh-client-ui-chat/client'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { DraftAttachmentId } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
@@ -93,7 +94,7 @@ function isAbort(cause: unknown, signal: AbortSignal): boolean {
 
 /** Complete Branches workbench: graph selection, read-only history, and Merge. */
 export function GraphView({
-  sessionId, useSession, useInput, inputActions, useGraph, syncTurns,
+  sessionId, useChat, useInput, inputActions, useGraph, syncTurns,
   adoptObservedGraph, loadProjectGraph, loadHistoryPreview, loadPreviewImage,
   tray, setComposerBlocked, activateAnchor, cancelAnchor, createMergedSession,
 }: ConvViewProps & InjectFace<GraphViewInjected>) {
@@ -101,10 +102,10 @@ export function GraphView({
   // Narrow subscriptions: an assistant delta swaps only `partial`, so the
   // graph, the rail, and every settled Chat History section keep their
   // memoized render while the live tail streams.
-  const nodes = useSession(value => value.nodes)
-  const timeline = useSession(value => value.chat.timeline)
-  const partial = useSession(value => value.partial)
-  const runningCalls = useSession(value => value.runningCalls)
+  const nodes = useChat(value => value.legacy.nodes)
+  const timeline = useChat(value => value.timeline)
+  const partial = useChat(value => value.legacy.partial)
+  const runningCalls = useChat(value => value.legacy.runningCalls)
   const input = useInput(value => value)
   const localState = useGraph((value: GraphState) => value)
   const turns = useMemo(

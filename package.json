@@ -38,8 +38,11 @@
     "client": {
       "inject": [
         "@deepseek-ai/dsh-client-connection",
-        "@deepseek-ai/dsh-client-runtime",
-        "@deepseek-ai/dsh-client-ui-conversation"
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-api-workspace-controller",
+        "@deepseek-ai/dsh-client-ui-chat",
+        "@deepseek-ai/dsh-client-ui-renderer"
       ],
       "platform": "web"
     }
@@ -68,7 +71,6 @@
     "@deepseek-ai/dsh-agent-presets": ">=0.1.0-rc.5",
     "@deepseek-ai/dsh-client-connection": ">=0.1.0-rc.5",
     "@deepseek-ai/dsh-client-locale": ">=0.1.0-rc.5",
-    "@deepseek-ai/dsh-client-runtime": ">=0.0.1-rc.1",
     "@deepseek-ai/dsh-client-ui-conversation": ">=0.0.1-rc.1",
     "@deepseek-ai/dsh-client-ui-primitives": ">=0.1.0-rc.5",
     "@deepseek-ai/dsh-client-ui-slots": ">=0.0.1-rc.1",
@@ -78,13 +80,14 @@
     "@deepseek-ai/dsh-storage-domain": ">=0.1.0-rc.5",
     "@deepseek-ai/dsh-workspace": ">=0.1.0-rc.5",
     "react": ">=18.2.0",
-    "react-dom": ">=18.2.0"
+    "react-dom": ">=18.2.0",
+    "@deepseek-ai/dsh-api-session-controller": ">=0.1.2-rc.1",
+    "@deepseek-ai/dsh-api-workspace-controller": ">=0.1.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-chat": ">=0.1.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-renderer": ">=0.1.2-rc.1"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/cordis": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-client-runtime": {
       "optional": true
     },
     "@deepseek-ai/dsh-client-ui-conversation": {
@@ -109,7 +112,6 @@
     "@deepseek-ai/dsh-agent-presets": "link:../deepseek-harness/packages/preset/agent-presets",
     "@deepseek-ai/dsh-client-connection": "link:../deepseek-harness/packages/client/connection",
     "@deepseek-ai/dsh-client-locale": "link:../deepseek-harness/packages/client/locale",
-    "@deepseek-ai/dsh-client-runtime": "link:../deepseek-harness/packages/client/runtime",
     "@deepseek-ai/dsh-client-ui-conversation": "link:../deepseek-harness/packages/client/ui-conversation",
     "@deepseek-ai/dsh-client-ui-primitives": "link:../deepseek-harness/packages/client/ui-primitives",
     "@deepseek-ai/dsh-client-ui-slots": "link:../deepseek-harness/packages/client/ui-slots",
@@ -129,7 +131,11 @@
     "react-dom": "^18.3.1",
     "tsdown": "^0.22.14",
     "typescript": "^5.9.2",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "@deepseek-ai/dsh-api-session-controller": "link:../deepseek-harness/packages/api/session-controller",
+    "@deepseek-ai/dsh-api-workspace-controller": "link:../deepseek-harness/packages/api/workspace-controller",
+    "@deepseek-ai/dsh-client-ui-chat": "link:../deepseek-harness/packages/client/ui-chat",
+    "@deepseek-ai/dsh-client-ui-renderer": "link:../deepseek-harness/packages/client/ui-renderer"
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"

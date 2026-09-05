@@ -1,6 +1,7 @@
+import type { ConversationTimelineSnapshot } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {
-  ConversationNode, ConversationTimelineSnapshot,
-} from '@deepseek-ai/dsh-client-runtime/client'
+  ConversationNode,
+} from '@deepseek-ai/dsh-client-ui-chat/client'
 import type { ImportedTurn } from './types.ts'
 
 /**

@@ -1,8 +1,8 @@
 /** DOM compatibility bridge for project-row buttons and the main-area takeover page. */
 import { createRoot, type Root } from 'react-dom/client'
-import type {
-  ISessions, IWorkspaces, SessionId, WorkspaceView,
-} from '@deepseek-ai/dsh-client-runtime/client'
+import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { IWorkspaces, WorkspaceView } from '@deepseek-ai/dsh-api-workspace-controller/client'
+import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { ProjectConnection } from '../connection-contract.ts'
 import type { GraphRepository } from './repository.ts'
 import { restoreAnchorSourceLabels } from './project-graph.ts'

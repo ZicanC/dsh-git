@@ -104,7 +104,12 @@ function graphViewFixture(
   const tray = new ContextTrayChannel()
   const props = {
     sessionId: 'session-a',
-    useSession: (selector: (value: unknown) => unknown) => selector(live.snapshot),
+    // Session no longer owns Chat data; the Chat target publishes it separately.
+    useSession: (selector: (value: unknown) => unknown) => selector({ running: false }),
+    useChat: (selector: (value: unknown) => unknown) => selector({
+      timeline: live.snapshot.chat.timeline,
+      legacy: live.snapshot,
+    }),
     useInput: (selector: (value: unknown) => unknown) => selector(inputSnapshot),
     inputActions: { submit },
     useGraph: (selector: (value: GraphState) => unknown) => selector(state),

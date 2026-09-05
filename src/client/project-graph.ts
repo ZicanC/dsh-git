@@ -331,9 +331,14 @@ export function assembleProjectGraph(
           targetTurn: singleSource.targetTurn,
         }
       : undefined
-    const relationParentIds = composedFork === undefined
-      ? exactMergeParents
-      : [composedFork.markerId]
+    // Anchored Sessions share one frozen, ordered prefix, even when its PAs
+    // originated in several Sessions. Each question branches from that prefix's
+    // tip; the full source set remains Context rather than merge edges.
+    const relationParentIds = isAnchoredSessionId(sid)
+      ? exactMergeContextIds.slice(-1)
+      : composedFork === undefined
+        ? exactMergeParents
+        : [composedFork.markerId]
     for (const turn of [...session.turns].sort((left, right) => left.turn - right.turn)) {
       if (!turn.inherited) ownTurnIndex += 1
       const isComposedForkMarker = turn.inherited && turn.turn === composedFork?.targetTurn

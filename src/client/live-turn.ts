@@ -1,3 +1,4 @@
+import type { ConversationTimelineSnapshot } from '@deepseek-ai/dsh-client-ui-conversation/client'
 /**
  * Live tail projection: the turns the official Chat is still streaming.
  *
@@ -10,8 +11,8 @@
  * preview already renders, so one component draws both halves.
  */
 import type {
-  AssistantBlock, ConversationNode, ConversationTimelineSnapshot, PartialAssistant, RunningToolCall,
-} from '@deepseek-ai/dsh-client-runtime/client'
+  AssistantBlock, ConversationNode, PartialAssistant, RunningToolCall,
+} from '@deepseek-ai/dsh-client-ui-chat/client'
 import type {
   HistoryPreviewContentBlock, HistoryPreviewImageAttachment, HistoryPreviewJsonValue,
   HistoryPreviewRecord,

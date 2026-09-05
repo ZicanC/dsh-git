@@ -1,5 +1,5 @@
 /** Resolve one persistent conversation graph per Workspace folder. */
-import type { IWorkspaces } from '@deepseek-ai/dsh-client-runtime/client';
+import type { IWorkspaces } from '@deepseek-ai/dsh-api-workspace-controller/client';
 import type { GraphTransport } from './graph-transport.ts';
 import { GraphRepository } from './repository.ts';
 /**

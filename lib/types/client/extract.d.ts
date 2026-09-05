@@ -1,4 +1,5 @@
-import type { ConversationNode, ConversationTimelineSnapshot } from '@deepseek-ai/dsh-client-runtime/client';
+import type { ConversationTimelineSnapshot } from '@deepseek-ai/dsh-client-ui-conversation/client';
+import type { ConversationNode } from '@deepseek-ai/dsh-client-ui-chat/client';
 import type { ImportedTurn } from './types.ts';
 /**
  * Snapshot slice the extraction reads; `ConversationSnapshot` satisfies it.

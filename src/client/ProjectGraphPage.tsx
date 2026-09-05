@@ -1,6 +1,6 @@
 /** Project-level Conversation Graph takeover page with a Fusion-style PA timeline. */
 import { useEffect, useMemo, useState } from 'react'
-import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
+import { PreviewMarkdown } from './PreviewMarkdown.tsx'
 import type { ProjectGraphResponse } from '../protocol.ts'
 import { GraphCanvas } from './GraphCanvas.tsx'
 import { assembleProjectGraph, projectGraphAt, type ProjectGraphModel } from './project-graph.ts'
@@ -122,8 +122,8 @@ export function ProjectGraphPage({
                   <div><dt>{localized('PA 完成', 'PA completed', locale)}</dt><dd>{formatTime(inspected.completedAt, locale)}</dd></div>
                   <div><dt>{localized('Session 创建', 'Session created', locale)}</dt><dd>{formatTime(inspected.sessionCreatedAt, locale)}</dd></div>
                 </dl>
-                <section className="dsh-git-message"><span className="dsh-git-message-label">PROMPT</span><MarkdownText text={inspected.prompt || localized('（无文字问题）', '(No text prompt)', locale)} /></section>
-                <section className="dsh-git-message"><span className="dsh-git-message-label">ANSWER</span><MarkdownText text={inspected.answer || localized('（没有文字回答）', '(No text answer)', locale)} /></section>
+                <section className="dsh-git-message"><span className="dsh-git-message-label">PROMPT</span><PreviewMarkdown text={inspected.prompt || localized('（无文字问题）', '(No text prompt)', locale)} /></section>
+                <section className="dsh-git-message"><span className="dsh-git-message-label">ANSWER</span><PreviewMarkdown text={inspected.answer || localized('（没有文字回答）', '(No text answer)', locale)} /></section>
                 <section className="dsh-git-context-history">
                   <span className="dsh-git-message-label">CONTEXT</span>
                   {inspected.contextManifest.length === 0

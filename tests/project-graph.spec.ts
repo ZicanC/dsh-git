@@ -288,10 +288,10 @@ describe('project graph assembly', () => {
     expect(Object.keys(model.nodes).some(id => id.startsWith('project-fork:dsh-git-multi-source:'))).toBe(false)
   })
 
-  it('shares original anchor PAs while keeping every anchored Session parallel', () => {
+  it.each(['source', 'other-source'])('shares original anchor PAs while keeping every anchored Session parallel (second source: %s)', (secondSource) => {
     const anchorSources = [
       { sourceSessionId: 'source', sourceTurn: 2, sourceBoundarySeq: 20, targetTurn: 1, sourceLabel: 'PA3' },
-      { sourceSessionId: 'source', sourceTurn: 5, sourceBoundarySeq: 50, targetTurn: 2, sourceLabel: 'PA7' },
+      { sourceSessionId: secondSource, sourceTurn: 5, sourceBoundarySeq: 50, targetTurn: 2, sourceLabel: 'PA7' },
     ]
     const anchored = (sessionId: string, createdAt: number, suffix: string) => ({
       sessionId,
@@ -327,9 +327,11 @@ describe('project graph assembly', () => {
       prompt: 'original prompt two', answer: 'original code two', displayLabel: 'PA3',
     })
     expect(model.nodes[a[2]!]!).toMatchObject({
-      sessionId: 'source', turn: 5, boundarySeq: 50,
+      sessionId: secondSource, turn: 5, boundarySeq: 50,
       prompt: 'original prompt five', answer: 'original code five', displayLabel: 'PA7',
     })
+    expect(model.nodes[a[1]!]!.parentIds).toEqual([])
+    expect(model.nodes[a[2]!]!.parentIds).toEqual([a[1]])
     expect(model.nodes[a[3]!]!.parentIds).toEqual([a[2]])
     expect(model.nodes[b[3]!]!.parentIds).toEqual([a[2]])
     expect(model.nodes[a[3]!]!.contextManifest).toEqual([a[1], a[2]])

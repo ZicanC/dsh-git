@@ -63,7 +63,7 @@ export function projectTurns(snapshot: SessionLogSnapshot): readonly ProjectTurn
       startedAt: start.time,
       completedAt: event.time,
       boundarySeq: event.seq,
-      inherited: event.seq < (snapshot.session.seedLength ?? 0),
+      inherited: event.seq < (snapshot.inheritedEventCount ?? 0),
       fingerprint: fingerprint(events),
     })
   }
@@ -77,7 +77,7 @@ export function projectSession(snapshot: SessionLogSnapshot): ProjectSessionDTO 
     sessionId: snapshot.session.id,
     createdAt: snapshot.session.createdAt,
     ...(snapshot.session.parentSession === undefined ? {} : { parentSessionId: snapshot.session.parentSession }),
-    seedLength: snapshot.session.seedLength ?? 0,
+    seedLength: snapshot.inheritedEventCount ?? 0,
     ...(lineage === undefined ? {} : { mergeSources: lineage.sources }),
     turns: projectTurns(snapshot),
   }

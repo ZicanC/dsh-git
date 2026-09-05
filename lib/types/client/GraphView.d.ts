@@ -35,4 +35,4 @@ export interface GraphViewInjected {
     readonly createMergedSession: (manifest: readonly TurnNodeId[], draft: MergeDraftTransfer, signal: AbortSignal) => Promise<void>;
 }
 /** Complete Branches workbench: graph selection, read-only history, and Merge. */
-export declare function GraphView({ sessionId, useSession, useInput, inputActions, useGraph, syncTurns, adoptObservedGraph, loadProjectGraph, loadHistoryPreview, loadPreviewImage, tray, setComposerBlocked, activateAnchor, cancelAnchor, createMergedSession, }: ConvViewProps & InjectFace<GraphViewInjected>): import("react").JSX.Element;
+export declare function GraphView({ sessionId, useChat, useInput, inputActions, useGraph, syncTurns, adoptObservedGraph, loadProjectGraph, loadHistoryPreview, loadPreviewImage, tray, setComposerBlocked, activateAnchor, cancelAnchor, createMergedSession, }: ConvViewProps & InjectFace<GraphViewInjected>): import("react").JSX.Element;

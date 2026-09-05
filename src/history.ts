@@ -1,4 +1,4 @@
-import { Session, SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { SessionLogSnapshot } from '@deepseek-ai/dsh-session-query'
 import { mergeLineageEvent } from './merge-lineage.ts'
 import type { HistoryTurnSource } from './protocol.ts'
@@ -38,11 +38,11 @@ function sourceTurnEvents(snapshot: SessionLogSnapshot, source: HistoryTurnSourc
   return snapshot.events.slice(startIndex, source.sourceBoundarySeq + 1)
 }
 
-function mappedSources(event: SessionEvent, seqMap: ReadonlyMap<number, number>): number[] | undefined {
+function mappedSources(event: SessionEvent, seqMap: ReadonlyMap<number, number>): SessionSeq[] | undefined {
   if (!('sourceEventSeqs' in event) || event.sourceEventSeqs === undefined) return undefined
   const mapped = event.sourceEventSeqs.flatMap(seq => {
     const target = seqMap.get(seq)
-    return target === undefined ? [] : [target]
+    return target === undefined ? [] : [SessionSeq(target)]
   })
   return mapped.length === 0 && event.sourceEventSeqs.length > 0 ? undefined : mapped
 }
@@ -131,7 +131,7 @@ export async function buildMergedSessionSeed(
     const snapshot = await readSession(SessionId(source.sourceSessionId))
     appendHistoricalTurn(target, sourceTurnEvents(snapshot, source), index + 1)
   }
-  const events = [...target.events]
+  const events = [...target.snapshotEvents()]
   events.push(mergeLineageEvent(sources, events.length, Date.now()))
   return events
 }

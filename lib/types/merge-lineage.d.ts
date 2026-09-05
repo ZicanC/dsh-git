@@ -13,7 +13,7 @@
  * cannot be passed through `Session.append`, so the event is constructed
  * directly and placed in the seed, which is the only write path that accepts it.
  */
-import type { SessionEvent } from '@deepseek-ai/dsh-session';
+import { type SessionEvent } from '@deepseek-ai/dsh-session';
 import type { HistoryTurnSource } from './protocol.ts';
 /** Where one turn of a merged Session was copied from. */
 export interface MergeLineageSource {

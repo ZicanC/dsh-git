@@ -1,4 +1,5 @@
-import type { ISessions, IWorkspaces } from '@deepseek-ai/dsh-client-runtime/client';
+import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client';
+import type { IWorkspaces } from '@deepseek-ai/dsh-api-workspace-controller/client';
 import type { ProjectConnection } from '../connection-contract.ts';
 import type { GraphRepository } from './repository.ts';
 import type { LocaleSource } from './i18n.ts';

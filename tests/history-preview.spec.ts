@@ -1,5 +1,5 @@
 import {
-  CallId,
+  ToolCallId,
   createAssistantMessage,
   createToolResultMessage,
   createUserMessage,
@@ -44,7 +44,7 @@ function richCompletedTurn(sessionId: string): Session {
         { type: 'reasoning', text: 'check the file' },
         { type: 'text', text: 'running a tool' },
         { type: 'image', attachment: image },
-        { type: 'tool-call', id: CallId('call-1'), name: 'read', arguments: '{"path":"a.ts"}' },
+        { type: 'tool-call', id: ToolCallId('call-1'), name: 'read', arguments: '{"path":"a.ts"}' },
         { type: 'future-card', title: 'forward compatible' } as never,
       ],
       source: { provider: 'mock', model: 'mock' },
@@ -52,13 +52,13 @@ function richCompletedTurn(sessionId: string): Session {
     usage: { inputTokens: 10, outputTokens: 5 },
   }, { surfaceOp: 'append' })
   session.append('tool/call', {
-    turn: 1, step: 1, callId: CallId('call-1'), name: 'read', arguments: '{"path":"a.ts"}',
+    turn: 1, step: 1, callId: ToolCallId('call-1'), name: 'read', arguments: '{"path":"a.ts"}',
   })
   session.append('tool/result', {
     turn: 1,
     step: 1,
     message: createToolResultMessage({
-      callId: CallId('call-1'),
+      callId: ToolCallId('call-1'),
       content: [{ type: 'text', text: 'file body' }],
       isError: false,
     }),
@@ -83,12 +83,12 @@ describe('Host history preview', () => {
     const sources = [second, first].map(session => ({
       sourceSessionId: session.id,
       sourceTurn: 1,
-      sourceBoundarySeq: turnEndSeq(session.events),
+      sourceBoundarySeq: turnEndSeq(session.snapshotEvents()),
     }))
     const preview = await projectHistoryPreview(sources, async sessionId => {
       const session = sessions.get(sessionId)
       if (session === undefined) throw new Error('missing fixture session')
-      return { session: session.header, events: [...session.events] }
+      return { session: session.header, inheritedEventCount: session.inheritedEventCount, events: [...session.snapshotEvents()] }
     })
 
     expect(preview.turns.map(turn => [turn.source.sourceSessionId, turn.targetTurn])).toEqual([
@@ -121,8 +121,8 @@ describe('Host history preview', () => {
     await expect(projectHistoryPreview([{
       sourceSessionId: source.id,
       sourceTurn: 2,
-      sourceBoundarySeq: turnEndSeq(source.events),
-    }], async () => ({ session: source.header, events: [...source.events] })))
+      sourceBoundarySeq: turnEndSeq(source.snapshotEvents()),
+    }], async () => ({ session: source.header, inheritedEventCount: source.inheritedEventCount, events: [...source.snapshotEvents()] })))
       .rejects.toThrow(/is not turn 2's end/)
   })
 

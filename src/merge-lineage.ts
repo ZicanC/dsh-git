@@ -13,7 +13,7 @@
  * cannot be passed through `Session.append`, so the event is constructed
  * directly and placed in the seed, which is the only write path that accepts it.
  */
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { HistoryTurnSource } from './protocol.ts'
 
 /** Where one turn of a merged Session was copied from. */
@@ -62,7 +62,7 @@ export function mergeLineageEvent(
       ...(source.sourceLabel === undefined ? {} : { sourceLabel: source.sourceLabel }),
     })),
   }
-  return { type: MERGE_LINEAGE_EVENT, seq, time, data: lineage, ignorable: true }
+  return { type: MERGE_LINEAGE_EVENT, seq: SessionSeq(seq), time, data: lineage, ignorable: true }
 }
 
 /** Recover merge lineage from a Session log, or `undefined` for an ordinary Session. */

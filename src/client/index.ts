@@ -1,6 +1,8 @@
+import type { SessionId } from '@deepseek-ai/dsh-session'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 /** Browser plugin: Conversation Graph selection and merge-only Chat creation. */
 import type { Context } from '@deepseek-ai/cordis'
-import type { ISessions, SessionBinding, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ISessions, SessionBinding } from '@deepseek-ai/dsh-api-session-controller/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '../connection-contract.ts'
