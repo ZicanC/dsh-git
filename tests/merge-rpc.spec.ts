@@ -92,8 +92,12 @@ describe('trusted merged-session RPC', () => {
     }
     const response = await createMergedSession(ctx, request, new AbortController().signal)
 
-    expect(response).toEqual({ targetSessionId: 'merged-child' })
     expect(create).toHaveBeenCalledTimes(1)
+    // The child's own log coordinates: where each seeded turn ends in the seed.
+    const seedBoundaries = (createOptions?.seed as readonly SessionEvent[])
+      .flatMap(event => event.type === 'turn/end' ? [event.seq] : [])
+    expect(seedBoundaries).toHaveLength(2)
+    expect(response).toEqual({ targetSessionId: 'merged-child', turnBoundaries: seedBoundaries })
     expect(createOptions?.sessionId).toBe('merged-child')
     expect(createOptions?.inheritedEventCount).toBe((createOptions?.seed as readonly SessionEvent[]).length)
     expect(createOptions?.meta).toEqual({

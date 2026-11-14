@@ -224,6 +224,7 @@ async function readWorkspaceSessions(
  * official parent and supplies its preset. Each source Session's log is read
  * once per request however many of its turns were selected.
  * @param cwdOf - working directory for the child, given the parent's snapshot.
+ * @returns the child's handle and the seed it was created from.
  */
 async function createComposedAgent(
   ctx: Context,
@@ -258,7 +259,7 @@ async function createComposedAgent(
   signal.throwIfAborted()
   const preset = resolveSessionPreset(primary.session, primary.events)
   const cwd = cwdOf(primary)
-  return await ctx.agents.create({
+  const handle = await ctx.agents.create({
     sessionId: targetSessionId,
     seed,
     inheritedEventCount: SessionLogOffset(seed.length),
@@ -271,6 +272,7 @@ async function createComposedAgent(
     signal,
     setup: agentCtx => ctx.agentPresets.mount(agentCtx, preset).then(() => undefined),
   })
+  return { handle, seed }
 }
 
 /**
@@ -305,14 +307,17 @@ export async function createMergedSession(
   if (ctx.agents.get(targetSessionId) !== undefined) {
     throw new Error(`target session "${targetSessionId}" already exists`)
   }
-  const handle = await createComposedAgent(
+  const { handle, seed } = await createComposedAgent(
     ctx, targetSessionId, request.sources, signal, primary => primary.session.cwd,
   )
   const primarySessionId = primarySourceSessionId(request.sources)
   const sourceWorkspace = ctx.workspaceRegistry.list()
     .find(workspace => workspace.sessionIds.includes(primarySessionId))
   if (sourceWorkspace !== undefined) await attachOrDispose(sourceWorkspace, handle, targetSessionId)
-  return { targetSessionId }
+  return {
+    targetSessionId,
+    turnBoundaries: seed.flatMap(event => event.type === 'turn/end' ? [event.seq] : []),
+  }
 }
 
 /** Create one strict-isolation child in the dedicated Anchor Workspace. */
@@ -335,7 +340,7 @@ export async function createAnchoredSession(
   if (targetWorkspace === undefined) {
     throw new Error(`anchor workspace "${request.workspaceId}" was not found`)
   }
-  const handle = await createComposedAgent(
+  const { handle } = await createComposedAgent(
     ctx, targetSessionId, request.sources, signal, () => targetWorkspace.path,
   )
   await attachOrDispose(targetWorkspace, handle, targetSessionId)

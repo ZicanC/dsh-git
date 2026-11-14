@@ -67,7 +67,8 @@ function fixture(options: { staging: boolean; attachmentIds: readonly string[] }
     if (endpoint === 'graph/read') return { ok: true, value: { scopeId: payload.scopeId, state: null } }
     if (endpoint === 'graph/write') return { ok: true, value: { scopeId: payload.scopeId } }
     if (endpoint === CREATE_MERGED_SESSION_RPC_ENDPOINT) {
-      return { ok: true, value: { targetSessionId: payload.targetSessionId } }
+      // The seed opens with a system message, so the child's turn ends one seq later than the source's.
+      return { ok: true, value: { targetSessionId: payload.targetSessionId, turnBoundaries: [7] } }
     }
     throw new Error(`unexpected endpoint ${endpoint}`)
   })
@@ -125,7 +126,7 @@ function fixture(options: { staging: boolean; attachmentIds: readonly string[] }
       attachmentIds: options.attachmentIds as never, hasStructuredReferences: false,
     }, new AbortController().signal)
   }
-  return { ctx, log, retain, sourceInput, childInput, createFromFirstTurn, opened }
+  return { ctx, log, retain, sourceInput, childInput, createFromFirstTurn, opened, view }
 }
 
 describe('merged Chat creation in the browser', () => {
@@ -162,6 +163,21 @@ describe('merged Chat creation in the browser', () => {
     expect(opened.size).toBe(0)
     // The unopened child is not kept alive.
     expect(log).toEqual(['release'])
+  })
+
+  it('addresses the new Chat\'s fork occurrence in the Chat\'s own log, as the Host reported it', async () => {
+    document.body.innerHTML = '<button role="tab" aria-selected="true">Branches</button>'
+    const { createFromFirstTurn, retain, view } = fixture({ staging: false, attachmentIds: [] })
+
+    await createFromFirstTurn()
+
+    const childSessionId = String(retain.mock.calls[0]![0])
+    const ledger = view.hooks.graph.getSnapshot()
+    const occurrence = ledger.nodes[ledger.sessionTurnRefs[childSessionId]![1]!]!
+    expect(occurrence).toMatchObject({ sessionId: childSessionId, turn: 1 })
+    expect(occurrence.forkSourceId).toBe(ledger.sessionTurnRefs.source![1])
+    // The source's turn ends at seq 6; reading the child's log there would fail.
+    expect(occurrence.boundarySeq).toBe(7)
   })
 
   it('moves a text-only draft without needing the staging face', async () => {

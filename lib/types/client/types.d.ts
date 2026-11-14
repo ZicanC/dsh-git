@@ -18,4 +18,10 @@ export interface PrepareMergedSessionInput {
     readonly parentIds: readonly TurnNodeId[];
     readonly primaryParentId: TurnNodeId | null;
     readonly contextManifest: readonly TurnNodeId[];
+    /**
+     * Seq that closes each seeded turn in the child's own log, in turn order,
+     * as the Host reported it. Without it a fork occurrence is addressed by its
+     * source's seq until the child's log has been read.
+     */
+    readonly turnBoundaries?: readonly number[] | undefined;
 }

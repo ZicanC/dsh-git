@@ -23,6 +23,13 @@ export interface CreateMergedSessionRequest {
 /** Successful creation acknowledgement returned by the Host. */
 export interface CreateMergedSessionResponse {
   readonly targetSessionId: string
+  /**
+   * Seq of the `turn/end` that closes each seeded turn in the new Session's
+   * own log, in turn order. A copied turn does not keep its source's seq, and
+   * the browser needs these to address the new Chat's turns before it has
+   * read its log.
+   */
+  readonly turnBoundaries: readonly number[]
 }
 
 /** Strict-isolation request: create one independent child in an Anchor Workspace. */
@@ -515,8 +522,13 @@ export function decodeCreateMergedSessionRequest(value: unknown): CreateMergedSe
 export function decodeCreateMergedSessionResponse(value: unknown): CreateMergedSessionResponse {
   const label = 'dsh-git create merged session response'
   const candidate = object(value, label)
-  exactKeys(candidate, ['targetSessionId'], label)
-  return { targetSessionId: nonBlank(candidate.targetSessionId, `${label} targetSessionId`) }
+  exactKeys(candidate, ['targetSessionId', 'turnBoundaries'], label)
+  if (!Array.isArray(candidate.turnBoundaries)) throw new Error(`${label} turnBoundaries must be an array`)
+  return {
+    targetSessionId: nonBlank(candidate.targetSessionId, `${label} targetSessionId`),
+    turnBoundaries: candidate.turnBoundaries.map((seq, index) =>
+      nonNegativeInteger(seq, `${label} turnBoundaries[${index}]`)),
+  }
 }
 
 /** Strictly validate an anchored-child creation request. */

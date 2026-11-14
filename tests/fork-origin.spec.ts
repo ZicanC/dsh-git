@@ -167,7 +167,7 @@ describe('official forks on a Harness that records no parent', () => {
       }, {
         viaSessionId: 'fork', sourceSessionId: 'fork', sourceTurn: 3, sourceBoundarySeq: turnEnd(fork, 3),
       }],
-    }, new AbortController().signal)).resolves.toEqual({ targetSessionId: 'dsh-git-child' })
+    }, new AbortController().signal)).resolves.toMatchObject({ targetSessionId: 'dsh-git-child' })
     expect(create).toHaveBeenCalledTimes(1)
   })
 })

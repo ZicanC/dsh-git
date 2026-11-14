@@ -668,6 +668,7 @@ export function apply(ctx: Context): void {
             parentIds: parents.parentIds,
             primaryParentId: parents.primaryParentId,
             contextManifest,
+            turnBoundaries: response.turnBoundaries,
           })
           const child = await retainCreatedSession(sessions, childSessionId, signal)
           if (child === undefined) {

@@ -19,6 +19,13 @@ export interface CreateMergedSessionRequest {
 /** Successful creation acknowledgement returned by the Host. */
 export interface CreateMergedSessionResponse {
     readonly targetSessionId: string;
+    /**
+     * Seq of the `turn/end` that closes each seeded turn in the new Session's
+     * own log, in turn order. A copied turn does not keep its source's seq, and
+     * the browser needs these to address the new Chat's turns before it has
+     * read its log.
+     */
+    readonly turnBoundaries: readonly number[];
 }
 /** Strict-isolation request: create one independent child in an Anchor Workspace. */
 export interface CreateAnchoredSessionRequest {

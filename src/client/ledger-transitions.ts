@@ -247,6 +247,8 @@ export function prepareMergedSession(state: GraphState, input: PrepareMergedSess
       id: markerId,
       sessionId: input.childSessionId,
       turn: inheritedTurn,
+      // The occurrence belongs to the child, so it is read from the child's log.
+      boundarySeq: input.turnBoundaries?.[inheritedTurn - 1] ?? forkSource.boundarySeq,
       createdAt: Date.now(),
       finalOrdinal: undefined,
       branchId,

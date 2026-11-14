@@ -210,8 +210,11 @@ describe('Host-side merged history', () => {
       sources: [{ sourceSessionId: 'source', sourceTurn: 7, sourceBoundarySeq: 42 }],
     }
     expect(decodeCreateMergedSessionRequest(request)).toEqual(request)
-    expect(decodeCreateMergedSessionResponse({ targetSessionId: 'merged' }))
-      .toEqual({ targetSessionId: 'merged' })
+    expect(decodeCreateMergedSessionResponse({ targetSessionId: 'merged', turnBoundaries: [6, 13] }))
+      .toEqual({ targetSessionId: 'merged', turnBoundaries: [6, 13] })
+    expect(() => decodeCreateMergedSessionResponse({ targetSessionId: 'merged' })).toThrow(/turnBoundaries/)
+    expect(() => decodeCreateMergedSessionResponse({ targetSessionId: 'merged', turnBoundaries: [6, -1] }))
+      .toThrow(/turnBoundaries/)
     expect(() => decodeCreateMergedSessionRequest({ ...request, rawPrompt: 'must not cross the seam' }))
       .toThrow(/unexpected field/)
     expect(() => decodeCreateMergedSessionRequest({
