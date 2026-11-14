@@ -168,7 +168,7 @@ pnpm pack
 测试按层分布：
 
 - **账本：** `graph-integrity.spec.ts`（fork 编号、一个会话一个出现位置、旧账本修复、无谓写入）、`graph-correctness.spec.ts`（定稿顺序、Context 引用、版本检查）、`repository.spec.ts`、`workspace-repositories.spec.ts`、`graph-domain.spec.ts`、`graph-medium.spec.ts`（真实 JSON 存储后端的读写往返）、`graph.spec.ts`、`labels.spec.ts`。
-- **宿主端：** `history.spec.ts`（种子合成、身份校验、`ignorable` 溯源事件）、`merge-rpc.spec.ts`（Fork、Merge 和锚定的 RPC 全流程）、`project-history.spec.ts`、`history-preview.spec.ts`。
+- **宿主端：** `history.spec.ts`（种子合成、身份校验、`ignorable` 溯源事件）、`merge-rpc.spec.ts`（Fork、Merge 和锚定的 RPC 全流程）、`project-history.spec.ts`、`history-preview.spec.ts`、`seed-head.spec.ts`（种子必须以系统提示词开头，日志才能读回）。
 - **项目图：** `project-graph.spec.ts`、`project-page.spec.tsx`、`project-bridge.spec.tsx`。
 - **界面：** `components.spec.tsx`、`graph-canvas-design.spec.tsx`、`graph-canvas-selection.spec.tsx`、`graph-canvas-zoom.spec.tsx`、`history-rail.spec.tsx`、`chat-history-preview.spec.tsx`、`preview-markdown.spec.tsx`、`preview-cache.spec.ts`、`live-turn.spec.ts`、`extract.spec.ts`。
 - **输入框与托盘：** `composer-send-guard.spec.ts`、`composer-discard-action.spec.tsx`、`composer-block-lease.spec.ts`、`context-tray-channel.spec.ts`、`context-tray-dock.spec.tsx`、`context-tray-slot.spec.ts`、`anchor-client.spec.ts`、`merge-client.spec.ts`（在会话引用上创建新 Chat 并转移草稿）、`draft-attachments.spec.ts`。
@@ -194,7 +194,7 @@ corepack pnpm --dir ../deepseek-harness dsh --profile web --port 0
 - 普通回合的 PA Context Window 显示「实际请求 Context 未知」。账本只记录 Fork 或 Merge 时明确选中的 Context，不从可见的父链反推普通回合实际带了什么。
 - 记录了来源的官方 fork，识别依靠子、父会话同回合号的 Prompt 和 Answer 文本一致。子会话比父会话先被读到时，要等父会话也进入账本才会折叠。
 - 新会话由宿主端创建，图账本由浏览器随后登记，两步之间没有事务。浏览器登记丢失时，项目图仍能从日志里的 `dsh-git/merge` 事件还原父关系。早于该事件引入的旧 merge 会话只能依赖账本。
-- 只有选中的已完成回合会写入新会话的种子；未选中的祖先回合不会被隐式继承。核心轨迹事件会被复制，来源插件特有、仅用于日志的事件会被排除。
+- 只有选中的已完成回合会写入新会话的种子；未选中的祖先回合不会被隐式继承。核心轨迹事件会被复制，来源插件特有、仅用于日志的事件会被排除。种子以一条系统提示词开头，取最后一个选中回合当时生效的那条；其余来源的系统提示词和工具变更通知不会重放。
 - 草稿里含有 `@` 引用等结构化内容时不能 Fork、Merge 或发送锚定问题。
-- Harness 把草稿图片上传到添加它的那个会话。把图片带进新 Chat 时，要通过 Harness Conversation 服务上一个不在公开接口里的成员为新会话重新上传。Harness 构建里没有这个成员时，带图片的草稿会被拒绝并留在原处；纯文字草稿仍然可以转移。
+- Harness 把草稿里的图片和附带的文件上传到添加它们的那个会话。把它们带进新 Chat 时，要通过 Harness Conversation 服务上一个不在公开接口里的成员为新会话重新上传。Harness 构建里没有这个成员时，带附件的草稿会被拒绝并留在原处；纯文字草稿仍然可以转移。
 - 图上的连线可以交叉，也可能穿过节点；没有避障。

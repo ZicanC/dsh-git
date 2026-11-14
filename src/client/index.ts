@@ -341,8 +341,8 @@ export function apply(ctx: Context): void {
             )
             if (!handOver.ok) {
               throw new Error(localized(
-                '子会话已创建，但图片无法转移；原草稿未清除。',
-                'The child Session was created, but its images could not be transferred; the source draft was preserved.',
+                '子会话已创建，但附件无法转移；原草稿未清除。',
+                'The child Session was created, but its attachments could not be transferred; the source draft was preserved.',
               ))
             }
             returnAttachments = handOver.undo
@@ -352,8 +352,8 @@ export function apply(ctx: Context): void {
             } catch (cause: unknown) {
               if (controller.signal.aborted) throw cause
               throw new Error(localized(
-                `子会话已创建，但图片未能上传到子会话：${cause instanceof Error ? cause.message : String(cause)}；原草稿未清除。`,
-                `The child Session was created, but its images could not be uploaded to it: ${cause instanceof Error ? cause.message : String(cause)}; the source draft was preserved.`,
+                `子会话已创建，但附件未能上传到子会话：${cause instanceof Error ? cause.message : String(cause)}；原草稿未清除。`,
+                `The child Session was created, but its attachments could not be uploaded to it: ${cause instanceof Error ? cause.message : String(cause)}; the source draft was preserved.`,
               ))
             }
             assertSourceUnchanged()
@@ -657,8 +657,8 @@ export function apply(ctx: Context): void {
             )
             if (!handOver.ok) {
               throw new Error(localized(
-                `新 Chat ${childSessionId} 已创建，但图片草稿无法转移；原草稿未改动。`,
-                `The new Chat ${childSessionId} was created, but its image draft could not be transferred; the source draft was preserved.`,
+                `新 Chat ${childSessionId} 已创建，但草稿附件无法转移；原草稿未改动。`,
+                `The new Chat ${childSessionId} was created, but its draft attachments could not be transferred; the source draft was preserved.`,
               ))
             }
             childInput.setDraft(draft.text)

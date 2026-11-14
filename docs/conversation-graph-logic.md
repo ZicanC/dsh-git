@@ -154,9 +154,10 @@ Branches 视图把当前 Session 已完成的回合交给 `syncSession(sessionId
 浏览器通过私有 RPC 只发送每个选中项的 Host 坐标和 `viaSessionId`。Host（`buildMergedSessionSeed`）：
 
 1. **先校验身份**：把每个坐标沿日志里的精确来源关系解析到它的原始回合——dsh-git 创建的 Session 沿 `dsh-git/merge` 事件（Harness 把旧日志迁移到格式 v4 后，这个事件的类型是 `plugin:dsh-git/merge`，两种都读），记录了来源的官方 fork 沿 `parentSession` 和继承边界。没有记录来源的官方 fork（Harness 0.2.1-rc.3 起）无法继续解析，它的继承回合被当作各自独立的身份。同一个 PA 被选了两次，或者 `viaSessionId` 的历史里并不恰好包含这个 PA 一次，整笔拒绝。
-2. 读取来源 Session 的规范日志，按 Tray 顺序把选中的已完成回合重新编号成连续的 Turn 1..N。复制的是回合本身的事件：回合与步骤边界、用户消息、`assistant/message`、没有产生消息的 `assistant/attempt`、工具调用与结果、请求头。来源 Session 的 `system/message` 和 `developer/message` 不复制——它们描述的是来源自己的系统提示词和工具表；新 Session 第一次请求时由 Harness 写入自己的系统提示词。
-3. 在种子末尾写入一条 `dsh-git/merge` 事件，记录每个导入回合的来源坐标、`viaSessionId` 和它在新 Session 里的回合号。
-4. 用这份种子创建新 agent，并把新 Session 加入来源 Session 所在的 Workspace。
+2. 读取来源 Session 的规范日志，按 Tray 顺序把选中的已完成回合重新编号成连续的 Turn 1..N。复制的是回合本身的事件：回合与步骤边界、用户消息、`assistant/message`、没有产生消息的 `assistant/attempt`、工具调用与结果、请求头。来源 Session 的 `system/message` 和 `developer/message` 不随回合复制——它们描述的是来源自己的系统提示词和工具表。
+3. 种子的第一个 surface 节点是一条 `system/message`：取 Tray 末位来源在被选回合结束时生效的那条系统提示词（新 Session 继承的正是这个来源的 preset），来源日志里没有系统提示词时写一条空的。Harness 读回已存日志时要求：surface 非空之后出现的任何 `system/message`，前面必须有一条位于 surface 首位的 `system/message`；而新 Session 第一次请求时 Harness 会在历史之后写入自己的系统提示词。没有这个首节点，新 Session 跑过一轮之后日志就读不回来了。首节点与新 Session 渲染出的提示词相同时，Harness 什么都不用再写。
+4. 在种子末尾写入一条 `dsh-git/merge` 事件，记录每个导入回合的来源坐标、`viaSessionId` 和它在新 Session 里的回合号。
+5. 用这份种子创建新 agent，并把新 Session 加入来源 Session 所在的 Workspace。
 
 身份校验只认日志里的来源关系，不比较文本。
 
@@ -261,9 +262,9 @@ fork 副本         → 紧挨来源右侧；该格被占时，只把本行这�
 - 回车和发送按钮被拦下，避免把问题发进旧 Session；
 - 出路只有两个：点 Tray 上的 **Fork / Merge**，或者点输入框旁的 **放弃更改并发送**（恢复为当前 Session 的完整历史，再发送到原 Session）。
 
-Fork/Merge 会把草稿文字和图片转移到新 Chat。草稿里有 `@` 引用等结构化内容时不能转移，操作会被拒绝。
+Fork/Merge 会把草稿文字、图片和上传的文件转移到新 Chat。草稿里有 `@` 引用等结构化内容时不能转移，操作会被拒绝。
 
-Harness 里一个会话只有被引用（retain）时才在浏览器里有输入框，最后一个引用释放时它的未发送草稿随之丢弃。所以创建新 Chat 时，插件先自己引用新会话，放好草稿，交给主视图打开，然后才释放自己的引用；锚定模式下子会话不上屏，引用一直持有到宿主端收下问题为止。图片是按会话上传的，转移时要为新会话重新上传（[`src/client/draft-attachments.ts`](../src/client/draft-attachments.ts)）；这一步用到 Harness 公开接口之外的成员，缺少它时带图片的草稿会被拒绝并留在原处。
+Harness 里一个会话只有被引用（retain）时才在浏览器里有输入框，最后一个引用释放时它的未发送草稿随之丢弃。所以创建新 Chat 时，插件先自己引用新会话，放好草稿，交给主视图打开，然后才释放自己的引用；锚定模式下子会话不上屏，引用一直持有到宿主端收下问题为止。图片和文件是按会话上传的，转移时要为新会话重新上传（[`src/client/draft-attachments.ts`](../src/client/draft-attachments.ts)）；这一步用到 Harness 公开接口之外的成员，缺少它时带附件的草稿会被拒绝并留在原处。
 
 锚定期间，发送手势改为向 Anchor Workspace 派发（§7）。
 

@@ -126,6 +126,8 @@ function projectEvent(event: SessionEvent): HistoryPreviewRecord | undefined {
     case 'step/start':
     case 'step/end':
     case 'assistant/attempt':
+    // The seed's opening system message is the new Chat's own; it is not part of a selected turn.
+    case 'system/message':
       return undefined
     default:
       return {

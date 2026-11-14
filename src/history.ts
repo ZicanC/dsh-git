@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { Session, SessionId, SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { SessionLogSnapshot } from '@deepseek-ai/dsh-session-query'
 import { mergeLineageEvent } from './merge-lineage.ts'
@@ -11,9 +12,9 @@ import type { HistoryTurnSource } from './protocol.ts'
  * `system/message` and `developer/message` are deliberately absent. Both
  * describe the source Session's own composition — its rendered system prompt
  * and its tool roster — and a `developer/message` cites a `request/header` by
- * seq that may lie outside the copied turn. The child's first request appends
- * its own system prompt (the loop does so whenever the surface holds no system
- * node) and diffs its tools against the last copied `request/header`.
+ * seq that may lie outside the copied turn. The seed opens with one system
+ * message of its own instead (see {@link SeedHead}), and the child's first
+ * request diffs its tools against the last copied `request/header`.
  */
 const COPIED_EVENT_TYPES = new Set([
   'turn/start',
@@ -59,15 +60,108 @@ function mappedSources(event: SessionEvent, seqMap: ReadonlyMap<number, number>)
   return mapped.length === 0 && event.sourceEventSeqs.length > 0 ? undefined : mapped
 }
 
-/** Copy one completed source turn into a detached target as a newly numbered real turn. */
+type SystemMessage = SessionEvent<'system/message'>['data']['message']
+
+/**
+ * The system message a seed opens with, until it has been written.
+ *
+ * Harness stores a log only if every `system/message` on a non-empty surface
+ * is preceded by a system message that was the surface's very first node. The
+ * loop writes the child's system prompt on its first request, after the copied
+ * history — so a seed whose surface began with a user message would produce a
+ * log that can no longer be read once the child has run a turn.
+ */
+export interface SeedHead {
+  readonly message: SystemMessage
+  placed: boolean
+}
+
+/** Whether a system node carries a prompt, by the rule the loop applies to its own nodes. */
+function hasPrompt(message: SystemMessage): boolean {
+  const [block] = message.content
+  return message.content.length > 1
+    || (block !== undefined && !(block.type === 'text' && block.text === ''))
+}
+
+/**
+ * The system message in effect at one point of a source log: the last
+ * surviving system node that carries a prompt, else the first system node.
+ * @param throughSeq - inclusive seq the surface is folded through.
+ * @returns the message, or undefined when the log has no system node there.
+ */
+export function effectiveSystemMessage(
+  events: readonly SessionEvent[],
+  throughSeq: number,
+): SystemMessage | undefined {
+  const surface: SessionEvent[] = []
+  for (const event of events) {
+    if (event.seq > throughSeq) break
+    if (!('surfaceOp' in event) || event.surfaceOp === undefined) continue
+    const operation = event.surfaceOp
+    if (operation === 'append') {
+      surface.push(event)
+      continue
+    }
+    const first = surface.findIndex(node => node.seq === operation.startSeq)
+    const last = surface.findIndex(node => node.seq === operation.endSeq)
+    if (first < 0 || last < first) continue
+    surface.splice(first, last - first + 1, event)
+  }
+  const nodes = surface.flatMap(event => event.type === 'system/message' ? [event.data.message] : [])
+  return nodes.findLast(hasPrompt) ?? nodes[0]
+}
+
+/** A system node recording "no system prompt", for a source log that has none to copy. */
+function emptySystemMessage(): SystemMessage {
+  return { id: randomUUID() as SystemMessage['id'], role: 'system', content: [], source: { kind: 'system-prompt' } }
+}
+
+function isSurfaceEvent(event: SessionEvent): boolean {
+  return event.type === 'user/message' || event.type === 'assistant/message' || event.type === 'tool/result'
+}
+
+/**
+ * Copy one completed source turn into a detached target as a newly numbered real turn.
+ * @param head - the seed's opening system message; written as the first
+ *   surface node, inside the first step the copied turns open.
+ */
 export function appendHistoricalTurn(
   target: Session,
   sourceEvents: readonly SessionEvent[],
   targetTurn: number,
+  head?: SeedHead,
 ): void {
   const seqMap = new Map<number, number>()
+  // Surface events met before the head could be written, in source order.
+  const held: SessionEvent[] = []
+  const placeHead = (step: number): void => {
+    if (head === undefined || head.placed) return
+    target.append('system/message', { turn: targetTurn, step, message: head.message }, { surfaceOp: 'append' })
+    head.placed = true
+    for (const event of held.splice(0)) copy(event)
+  }
   for (const event of sourceEvents) {
     if (!COPIED_EVENT_TYPES.has(event.type)) continue
+    if (head !== undefined && !head.placed) {
+      // A system message belongs to a step. Logs from before the system prompt
+      // was a surface event put the user message ahead of the first step, so
+      // it waits for that step and follows the head into it — or into a step
+      // opened just for the two when the turn never reached one.
+      if (isSurfaceEvent(event)) {
+        held.push(event)
+        continue
+      }
+      if (event.type === 'turn/end' && held.length > 0) {
+        target.append('step/start', { turn: targetTurn, step: 1 })
+        placeHead(1)
+        target.append('step/end', { turn: targetTurn, step: 1 })
+      }
+    }
+    copy(event)
+    if (event.type === 'step/start') placeHead(event.data.step)
+  }
+
+  function copy(event: SessionEvent): void {
     const sourceEventSeqs = mappedSources(event, seqMap)
     let appended: SessionEvent
     switch (event.type) {
@@ -96,7 +190,7 @@ export function appendHistoricalTurn(
         break
       case 'tool/result':
         // Replacement copies point into a source-only surface. Import the durable append-origin result only.
-        if (event.surfaceOp !== 'append') continue
+        if (event.surfaceOp !== 'append') return
         appended = target.append(
           'tool/result',
           { ...event.data, turn: targetTurn },
@@ -118,7 +212,7 @@ export function appendHistoricalTurn(
         appended = target.append('request/context', event.data)
         break
       default:
-        continue
+        return
     }
     seqMap.set(event.seq, appended.seq)
   }
@@ -175,9 +269,19 @@ export async function buildMergedSessionSeed(
     if (matches !== 1) throw new Error('Context source is not a unique Session history member')
   }
   const target = Session.create(SessionId(targetSessionId))
+  // The child inherits the preset of the last source, so that source's system
+  // prompt is the one its first request is most likely to render again — in
+  // which case the loop finds it already in place and writes nothing.
+  const last = sources.at(-1)
+  const head: SeedHead | undefined = last === undefined ? undefined : {
+    message: effectiveSystemMessage(
+      (await readSession(SessionId(last.sourceSessionId))).events, last.sourceBoundarySeq,
+    ) ?? emptySystemMessage(),
+    placed: false,
+  }
   for (const [index, source] of sources.entries()) {
     const snapshot = await readSession(SessionId(source.sourceSessionId))
-    appendHistoricalTurn(target, sourceTurnEvents(snapshot, source), index + 1)
+    appendHistoricalTurn(target, sourceTurnEvents(snapshot, source), index + 1, head)
   }
   const events = [...target.snapshotEvents()]
   events.push(mergeLineageEvent(sources, events.length, Date.now()))

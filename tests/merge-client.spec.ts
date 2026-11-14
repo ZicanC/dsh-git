@@ -129,7 +129,7 @@ function fixture(options: { staging: boolean; attachmentIds: readonly string[] }
 }
 
 describe('merged Chat creation in the browser', () => {
-  it('moves the draft and its images, opens the new Chat, and only then lets go of it', async () => {
+  it('moves the draft and its attachments, opens the new Chat, and only then lets go of it', async () => {
     // The Branches tab of the opened Chat, already selected.
     document.body.innerHTML = '<button role="tab" aria-selected="true">Branches</button>'
     const { log, retain, createFromFirstTurn, opened, childInput } = fixture({ staging: true, attachmentIds: ['image-1'] })
@@ -150,10 +150,10 @@ describe('merged Chat creation in the browser', () => {
     expect(childInput.notify).not.toHaveBeenCalled()
   })
 
-  it('leaves a draft with images where it is when this Harness cannot stage them for another Session', async () => {
+  it('leaves a draft with attachments where it is when this Harness cannot stage them for another Session', async () => {
     const { log, sourceInput, childInput, createFromFirstTurn, opened } = fixture({ staging: false, attachmentIds: ['image-1'] })
 
-    await expect(createFromFirstTurn()).rejects.toThrow(/图片草稿无法转移|could not be transferred/)
+    await expect(createFromFirstTurn()).rejects.toThrow(/草稿附件无法转移|could not be transferred/)
 
     expect(childInput.addAttachments).not.toHaveBeenCalled()
     expect(childInput.setDraft).not.toHaveBeenCalled()
