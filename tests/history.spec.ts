@@ -31,6 +31,26 @@ function completedTurn(sessionId: string, question: string, answer: string): Ses
   return session
 }
 
+/** Append one more completed turn to a fixture Session. */
+function appendTurn(session: Session, turn: number, question: string, answer: string): void {
+  session.append('turn/start', { turn })
+  session.append('step/start', { turn, step: 1 })
+  session.append('user/message', createUserMessage({
+    content: [{ type: 'text', text: question }],
+    source: { kind: 'user' },
+  }), { surfaceOp: 'append' })
+  session.append('assistant/message', {
+    turn,
+    step: 1,
+    message: createAssistantMessage({
+      content: [{ type: 'text', text: answer }],
+      source: { provider: 'mock', model: 'mock' },
+    }),
+  }, { surfaceOp: 'append' })
+  session.append('step/end', { turn, step: 1 })
+  session.append('turn/end', { turn, reason: { kind: 'completed' } })
+}
+
 function turnEndSeq(events: readonly SessionEvent[]): number {
   const event = events.findLast(candidate => candidate.type === 'turn/end')
   if (event === undefined) throw new Error('fixture has no turn/end')
@@ -57,6 +77,42 @@ describe('Host-side merged history', () => {
     expect(decoded.sessions[0]!.mergeSources![0]!.viaSessionId).toBe('fork')
     await expect(buildMergedSessionSeed('invalid', [{ ...source, viaSessionId: 'empty' }], read)).rejects.toThrow(/history member/)
     await expect(buildMergedSessionSeed('duplicate', [source, { ...source, sourceSessionId: 'fork' }], read)).rejects.toThrow(/Duplicate/)
+  })
+
+  it('addresses a composed Fork copy by the child Session\'s own boundary, not the source\'s', async () => {
+    const source = completedTurn('source', 'P1', 'A1')
+    appendTurn(source, 2, 'P2', 'A2')
+    const sourceEvents = [...source.snapshotEvents()]
+    const sourceBoundary = turnEndSeq(sourceEvents)
+    const snapshots = new Map<string, { session: Session['header'], inheritedEventCount: number, events: SessionEvent[] }>([
+      ['source', { session: source.header, inheritedEventCount: 0, events: sourceEvents }],
+    ])
+    const read = async (id: string) => {
+      const snapshot = snapshots.get(id)
+      if (snapshot === undefined) throw new Error('missing fixture session')
+      return snapshot
+    }
+    // A Fork that keeps only the source's second turn renumbers it to Turn 1.
+    const seed = [...await buildMergedSessionSeed('child', [
+      { sourceSessionId: 'source', sourceTurn: 2, sourceBoundarySeq: sourceBoundary },
+    ], read)]
+    const childBoundary = turnEndSeq(seed)
+    expect(childBoundary).not.toBe(sourceBoundary)
+    snapshots.set('child', {
+      session: { ...source.header, id: SessionId('child'), parentSession: source.id },
+      inheritedEventCount: seed.length,
+      events: seed,
+    })
+
+    const again = await buildMergedSessionSeed('grandchild', [
+      { sourceSessionId: 'child', sourceTurn: 1, sourceBoundarySeq: childBoundary },
+    ], read)
+    expect(again.filter(event => event.type === 'turn/end').map(event => event.data.turn)).toEqual([1])
+    // The coordinates the browser sent before the fix: the child's Session and
+    // turn paired with the boundary the turn had in its source Session.
+    await expect(buildMergedSessionSeed('stale', [
+      { sourceSessionId: 'child', sourceTurn: 1, sourceBoundarySeq: sourceBoundary },
+    ], read)).rejects.toThrow(/is not turn 1's end/)
   })
 
   it('materializes PA1 and PA7 as Turns 1 and 2 so the next request is Turn 3', async () => {
