@@ -627,6 +627,32 @@ describe('graph UI', () => {
     expect(fixture.loadHistoryPreview).toHaveBeenCalledTimes(2)
   })
 
+  it('shows the PAs that can be read when one of a batch cannot, and drops the error with that PA', async () => {
+    const fixture = graphViewFixture(state)
+    fixture.loadHistoryPreview.mockImplementation(async (sources: readonly HistoryTurnSource[]) => {
+      if (sources.some(source => source.sourceTurn === 2)) throw new Error('PA2 is unreadable')
+      return previewFor(sources)
+    })
+    fixture.props.loadHistoryPreview = fixture.loadHistoryPreview
+    const view = renderGraphView(fixture)
+    const section = (nodeId: string) =>
+      view.container.querySelector(`.dsh-git-preview-turn[data-node-id="${nodeId}"]`) as HTMLElement
+
+    // PA1 was asked for together with PA2; it is read on its own once the batch fails.
+    await vi.waitFor(() => expect(within(section(one.id)).getByText('Preview prompt 1')).toBeTruthy())
+    await vi.waitFor(() => expect(within(screen.getByLabelText('Chat History')).getByRole('alert').textContent)
+      .toBe('PA2 is unreadable'))
+    // A PA that failed is not shown as still loading, and is not asked for again and again.
+    expect(section(two.id).getAttribute('aria-busy')).toBeNull()
+    const calls = fixture.loadHistoryPreview.mock.calls.length
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)) })
+    expect(fixture.loadHistoryPreview.mock.calls.length).toBe(calls)
+
+    fireEvent.click(screen.getByRole('button', { name: '查看 PA2 context' }))
+    fireEvent.click(screen.getByRole('button', { name: '移出 Context' }))
+    await vi.waitFor(() => expect(within(screen.getByLabelText('Chat History')).queryByRole('alert')).toBeNull())
+  })
+
   it('streams the running turn under the merged history until the graph owns it', async () => {
     const openTurn = {
       turn: 3,
