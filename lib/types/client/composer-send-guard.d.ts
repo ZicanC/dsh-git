@@ -7,8 +7,8 @@
  * whole textarea inert, which also takes away the drafting the Merge exists to
  * carry. So the guard works at the DOM edge of the composer card that this
  * plugin's own control renders inside, and it is best-effort by nature: it
- * refuses the two send gestures the shipped bar has (Enter in the textarea and
- * the primary button) and leaves everything else — typing, Shift+Enter, IME
+ * refuses the two send gestures the shipped bar has (Enter in the text input
+ * and the primary button) and leaves everything else — typing, Shift+Enter, IME
  * composition, attachments, the model seat, Stop — alone.
  */
 /** Report one refused send so the caller can explain it in its own surface. */

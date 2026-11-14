@@ -95,4 +95,27 @@ describe('installComposerSendGuard', () => {
     expect(() => installComposerSendGuard(orphan, refused)()).not.toThrow()
     expect(refused).not.toHaveBeenCalled()
   })
+
+  it('refuses Enter in the rich-text composer Harness renders since 0.2, wherever inside it the caret is', () => {
+    const { card, anchor } = composer()
+    card.querySelector('textarea')!.outerHTML =
+      '<div contenteditable="true" role="textbox" data-composer-input="true"><p><span>draft</span></p></div>'
+    const editor = card.querySelector<HTMLElement>('[data-composer-input]')!
+    const refused = vi.fn()
+    const reachedEditor = vi.fn()
+    editor.addEventListener('keydown', reachedEditor)
+    const stop = installComposerSendGuard(anchor, refused)
+
+    // The key event targets the editor itself or a node inside it, never a textarea.
+    expect(enter(editor)).toBe(false)
+    expect(enter(editor.querySelector('span')!)).toBe(false)
+    expect(refused).toHaveBeenCalledTimes(2)
+    expect(reachedEditor).not.toHaveBeenCalled()
+    // A newline is still the editor's.
+    expect(enter(editor, { shiftKey: true })).toBe(true)
+    expect(reachedEditor).toHaveBeenCalledTimes(1)
+
+    stop()
+    expect(enter(editor)).toBe(true)
+  })
 })

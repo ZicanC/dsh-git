@@ -7,8 +7,8 @@
  * whole textarea inert, which also takes away the drafting the Merge exists to
  * carry. So the guard works at the DOM edge of the composer card that this
  * plugin's own control renders inside, and it is best-effort by nature: it
- * refuses the two send gestures the shipped bar has (Enter in the textarea and
- * the primary button) and leaves everything else — typing, Shift+Enter, IME
+ * refuses the two send gestures the shipped bar has (Enter in the text input
+ * and the primary button) and leaves everything else — typing, Shift+Enter, IME
  * composition, attachments, the model seat, Stop — alone.
  */
 
@@ -25,6 +25,17 @@ function sendButton(card: HTMLElement): Element | null {
   const primary = buttons[buttons.length - 1]
   if (primary === undefined) return null
   return primary.querySelector('rect') === null ? primary : null
+}
+
+/**
+ * Whether a key event comes from the composer's text input: a `<textarea>` up
+ * to Harness 0.1, a rich-text editor since, whose key events target the
+ * editable element or a node inside it.
+ */
+function fromComposerInput(target: EventTarget | null): boolean {
+  if (target instanceof HTMLTextAreaElement) return true
+  return target instanceof Element
+    && target.closest('[data-composer-input],[contenteditable="true"]') !== null
 }
 
 /** An open slash/@ menu owns Enter for its own selection; never take it. */
@@ -51,7 +62,7 @@ export function installComposerSendGuard(
     onRefused()
   }
   const onKeyDown = (event: KeyboardEvent): void => {
-    if (!(event.target instanceof HTMLTextAreaElement)) return
+    if (!fromComposerInput(event.target)) return
     if (event.key !== 'Enter' || event.shiftKey || event.repeat) return
     // Shift+Enter is a newline, a composing Enter picks an IME candidate, and
     // an open menu's Enter picks a row: none of the three is a send.
