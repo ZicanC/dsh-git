@@ -703,4 +703,64 @@ describe('graph UI', () => {
 
     expect(document.querySelector('[data-preview-state="live"]')).toBeNull()
   })
+
+  /** Selection state of each PA button, by label. */
+  const selection = (): Record<string, string | null> => Object.fromEntries(
+    ['PA1', 'PA2', 'PA3'].map(label => [
+      label, screen.getByRole('button', { name: `查看 ${label} context` }).getAttribute('data-selection-state'),
+    ]))
+  /** The same ledger after `three` completed as turn 3 of the Chat on screen. */
+  const grown = graph([one, two, { ...three, sessionId: 'session-a', turn: 3, parentIds: [two.id], primaryParentId: two.id }], {
+    sessionTurnRefs: { 'session-a': { 1: one.id, 2: two.id, 3: three.id } },
+  })
+  const showLedger = (fixture: GraphViewFixture, view: ReturnType<typeof renderGraphView>, next: GraphState): void => {
+    fixture.props.useGraph = (selector: (value: GraphState) => unknown) => selector(next)
+    act(() => { view.rerender(<GraphViewHarness fixture={fixture} />) })
+  }
+
+  it('lets a turn completed later join the selection while the Context is untouched', async () => {
+    const fixture = graphViewFixture(state)
+    const view = renderGraphView(fixture)
+    await vi.waitFor(() => expect(selection()).toEqual({ PA1: 'selected', PA2: 'selected', PA3: 'unselected' }))
+
+    showLedger(fixture, view, grown)
+
+    expect(selection()).toEqual({ PA1: 'selected', PA2: 'selected', PA3: 'selected' })
+    // Following the Chat's own history is not an edit: nothing to Merge or discard.
+    expect(screen.queryByRole('button', { name: '放弃更改并发送' })).toBeNull()
+  })
+
+  it('stops following the Chat once the Context was edited, and follows again after the edit is undone', async () => {
+    const fixture = graphViewFixture(state)
+    const view = renderGraphView(fixture)
+    await vi.waitFor(() => expect(selection()).toEqual({ PA1: 'selected', PA2: 'selected', PA3: 'unselected' }))
+
+    fireEvent.click(screen.getByRole('button', { name: '查看 PA2 context' }))
+    fireEvent.click(screen.getByRole('button', { name: '移出 Context' }))
+    expect(selection()).toEqual({ PA1: 'selected', PA2: 'unselected', PA3: 'unselected' })
+    showLedger(fixture, view, grown)
+    // An edited Context is the user's: a new turn does not rewrite it.
+    expect(selection()).toEqual({ PA1: 'selected', PA2: 'unselected', PA3: 'unselected' })
+
+    showLedger(fixture, view, state)
+    fireEvent.click(screen.getByRole('button', { name: '查看 PA2 context' }))
+    fireEvent.click(screen.getByRole('button', { name: '加入 Context' }))
+    expect(selection()).toEqual({ PA1: 'selected', PA2: 'selected', PA3: 'unselected' })
+    showLedger(fixture, view, grown)
+    expect(selection()).toEqual({ PA1: 'selected', PA2: 'selected', PA3: 'selected' })
+  })
+
+  it('freezes the selection on the anchored PAs and makes the graph inert while anchored', async () => {
+    const anchored = { ...state, anchors: { 'session-a': {
+      sourceSessionId: 'session-a', nodeIds: [one.id], workspaceId: 'anchor-workspace',
+      workspacePath: '/workspace/dsh-git-anchors-test', workspaceTitle: '锚点问题 · Test', createdAt: 1,
+    } } }
+    const fixture = graphViewFixture(anchored)
+    renderGraphView(fixture)
+
+    await vi.waitFor(() => expect(selection()).toEqual({ PA1: 'selected', PA2: 'unselected', PA3: 'unselected' }))
+    expect(screen.getByRole('button', { name: '查看 PA1 context' }).getAttribute('data-anchor-state')).toBe('anchored')
+    expect((screen.getByRole('button', { name: '查看 PA3 context' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByRole('button', { name: /已锚定 1/ }).getAttribute('aria-pressed')).toBe('true')
+  })
 })

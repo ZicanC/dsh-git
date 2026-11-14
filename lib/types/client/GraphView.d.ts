@@ -1,15 +1,13 @@
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client';
 import type { InjectFace } from '@deepseek-ai/dsh-client-ui-slots';
-import type { HistoryPreviewImageAttachment, HistoryPreviewResponse, HistoryTurnSource, ProjectGraphResponse } from '../protocol.ts';
+import type { HistoryPreviewImageAttachment, HistoryPreviewResponse, HistoryTurnSource } from '../protocol.ts';
 import { type LoadedPreviewImage } from './ChatHistoryPreview.tsx';
 import type { ContextTrayChannel } from './context-tray-channel.ts';
 import type { GraphRepository } from './repository.ts';
 import type { MergeDraftTransfer } from './merged-chat.ts';
 import type { AnchorModeState, GraphState, ImportedTurn, TurnNodeId } from './types.ts';
-export interface ProjectGraphLoad {
-    readonly response: ProjectGraphResponse;
-    readonly sessionTitles: Readonly<Record<string, string>>;
-}
+import { type ProjectGraphLoad } from './use-project-graph.ts';
+export type { ProjectGraphLoad } from './use-project-graph.ts';
 /** Browser callbacks and observables supplied from the plugin apply closure. */
 export interface GraphViewInjected {
     readonly persistenceError?: () => string | null;
@@ -29,5 +27,11 @@ export interface GraphViewInjected {
     readonly cancelAnchor: (signal: AbortSignal) => Promise<void>;
     readonly createMergedSession: (manifest: readonly TurnNodeId[], draft: MergeDraftTransfer, signal: AbortSignal) => Promise<void>;
 }
-/** Complete Branches workbench: graph selection, read-only history, and Merge. */
+/**
+ * Complete Branches workbench: graph selection, read-only history, and Merge.
+ *
+ * The component composes four pieces of state — the Workspace graph, the
+ * Context selection, Chat History for that selection, and the action in
+ * flight — and renders them. Each lives in its own hook.
+ */
 export declare function GraphView({ sessionId, useChat, useInput, inputActions, useGraph, syncTurns, adoptObservedGraph, loadProjectGraph, loadHistoryPreview, loadPreviewImage, tray, setComposerBlocked, activateAnchor, cancelAnchor, createMergedSession, persistenceError, }: ConvViewProps & InjectFace<GraphViewInjected>): import("react").JSX.Element;

@@ -4,7 +4,7 @@ import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/clie
 import { IconPanelLeftOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace } from '@deepseek-ai/dsh-client-ui-slots'
 import type {
-  HistoryPreviewImageAttachment, HistoryPreviewResponse, HistoryTurnSource, ProjectGraphResponse,
+  HistoryPreviewImageAttachment, HistoryPreviewResponse, HistoryTurnSource,
 } from '../protocol.ts'
 import { MAX_MERGED_HISTORY_TURNS } from '../protocol.ts'
 import {
@@ -13,24 +13,23 @@ import {
 import type { ContextTrayProps } from './ContextTray.tsx'
 import type { ContextTrayChannel } from './context-tray-channel.ts'
 import { GraphCanvas } from './GraphCanvas.tsx'
-import { contextReferences, hostCoordinates, paIdentityId } from './graph.ts'
+import { contextReferences, hostCoordinates } from './graph.ts'
 import { HistoryRail } from './HistoryRail.tsx'
 import { historyRailModel } from './history-rail.ts'
 import { PAContextWindow } from './PAContextWindow.tsx'
 import type { GraphRepository } from './repository.ts'
 import { extractCompletedTurns } from './extract.ts'
 import { projectLiveTurns } from './live-turn.ts'
-import { HistoryPreviewCache, previewSourceKey } from './preview-cache.ts'
 import { nodeLabelMap } from './labels.ts'
-import { assembleProjectGraph } from './project-graph.ts'
 import { localized, useLocale } from './i18n.ts'
 import type { MergeDraftTransfer } from './merged-chat.ts'
 import type { AnchorModeState, GraphState, ImportedTurn, TurnNodeId } from './types.ts'
+import { useBusyAction } from './use-busy-action.ts'
+import { useContextSelection } from './use-context-selection.ts'
+import { useHistoryPreview } from './use-history-preview.ts'
+import { useProjectGraph, type ProjectGraphLoad } from './use-project-graph.ts'
 
-export interface ProjectGraphLoad {
-  readonly response: ProjectGraphResponse
-  readonly sessionTitles: Readonly<Record<string, string>>
-}
+export type { ProjectGraphLoad } from './use-project-graph.ts'
 
 /** Browser callbacks and observables supplied from the plugin apply closure. */
 export interface GraphViewInjected {
@@ -58,31 +57,13 @@ export interface GraphViewInjected {
   ) => Promise<void>
 }
 
-function distinct(ids: readonly TurnNodeId[]): TurnNodeId[] {
-  return [...new Set(ids)]
-}
-
-function sessionHistory(state: GraphState, sessionId: string): TurnNodeId[] {
-  return distinct(Object.entries(state.sessionTurnRefs[sessionId] ?? {})
-    .sort(([left], [right]) => Number(left) - Number(right))
-    .flatMap(([, nodeId]) => state.nodes[nodeId] === undefined ? [] : [nodeId]))
-}
-
-function sameIds(left: readonly TurnNodeId[], right: readonly TurnNodeId[]): boolean {
-  return left.length === right.length && left.every((id, index) => id === right[index])
-}
-
-function sourceOf(state: GraphState, nodeId: TurnNodeId): HistoryTurnSource | null {
-  const node = state.nodes[nodeId]
-  return node === undefined ? null : hostCoordinates(node)
-}
-
-function isAbort(cause: unknown, signal: AbortSignal): boolean {
-  return signal.aborted
-    || (typeof cause === 'object' && cause !== null && 'name' in cause && cause.name === 'AbortError')
-}
-
-/** Complete Branches workbench: graph selection, read-only history, and Merge. */
+/**
+ * Complete Branches workbench: graph selection, read-only history, and Merge.
+ *
+ * The component composes four pieces of state — the Workspace graph, the
+ * Context selection, Chat History for that selection, and the action in
+ * flight — and renders them. Each lives in its own hook.
+ */
 export function GraphView({
   sessionId, useChat, useInput, inputActions, useGraph, syncTurns,
   adoptObservedGraph, loadProjectGraph, loadHistoryPreview, loadPreviewImage,
@@ -102,128 +83,43 @@ export function GraphView({
     () => extractCompletedTurns({ nodes, chat: { timeline } }), [nodes, timeline])
   const turnSignature = turns.map(turn => `${turn.turn}:${turn.boundarySeq}:${turn.answer.length}`).join('|')
 
-  const [project, setProject] = useState<ProjectGraphLoad | null>(null)
-  const [projectError, setProjectError] = useState<string | null>(null)
-  const [projectSettled, setProjectSettled] = useState(false)
-  const [selectionVia, setSelectionVia] = useState<Record<string, string>>({})
-  const [selectedIds, setSelectedIds] = useState<TurnNodeId[]>([])
-  const [baselineIds, setBaselineIds] = useState<TurnNodeId[]>([])
-  const [selectionTouched, setSelectionTouched] = useState(false)
-  const [candidateId, setCandidateId] = useState<TurnNodeId | null>(null)
-  // Where the dashed candidate sits in the previewed merge order; the user can
-  // move it before deciding to add it, so it is not always the last entry.
-  const [candidateIndex, setCandidateIndex] = useState(0)
-  const [inspectedId, setInspectedId] = useState<TurnNodeId | null>(null)
   const [graphOpen, setGraphOpen] = useState(true)
   const [activeTrailId, setActiveTrailId] = useState<TurnNodeId | null>(null)
-  // Bumped whenever the preview cache or its failures change, to republish what is derived from them.
-  const [previewRevision, setPreviewRevision] = useState(0)
-  const [previewLoading, setPreviewLoading] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [anchorBusy, setAnchorBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
-  const mergeAbortRef = useRef<AbortController | null>(null)
-  const anchorAbortRef = useRef<AbortController | null>(null)
+  const [busy, runMerge] = useBusyAction(setActionError)
+  const [anchorBusy, runAnchor] = useBusyAction(setActionError)
   const trayOwnerRef = useRef<object>({})
-  // A completed turn is immutable, so its records are cached for the lifetime
-  // of this view and never re-read when the selection changes.
-  const previewCacheRef = useRef(new HistoryPreviewCache())
-  const previewInFlightRef = useRef(new Set<string>())
-  // PAs the Host could not read, by source key, with the reason.
-  const previewFailuresRef = useRef(new Map<string, string>())
-  const previewSelectedRef = useRef<ReadonlySet<string>>(new Set())
-  const loadHistoryPreviewRef = useRef(loadHistoryPreview)
-  loadHistoryPreviewRef.current = loadHistoryPreview
-  const previewAbortRef = useRef<AbortController | null>(null)
 
-  useEffect(() => () => { mergeAbortRef.current?.abort() }, [])
-  useEffect(() => () => { anchorAbortRef.current?.abort() }, [])
-  useEffect(() => () => { previewAbortRef.current?.abort() }, [])
-
-  useEffect(() => {
-    const controller = new AbortController()
-    setProjectError(null)
-    void loadProjectGraph(controller.signal).then((loaded) => {
-      if (controller.signal.aborted) return
-      setProject(loaded)
-      setProjectSettled(true)
-    }).catch((cause: unknown) => {
-      if (controller.signal.aborted) return
-      setProjectError(cause instanceof Error ? cause.message : String(cause))
-      setProjectSettled(true)
-    })
-    return () => controller.abort()
-  }, [sessionId, loadProjectGraph])
-
-  const projectModel = useMemo(() => project === null
-    ? null
-    : assembleProjectGraph(project.response, localState, project.sessionTitles), [project, localState])
-  const state = projectModel?.state ?? localState
+  const project = useProjectGraph(String(sessionId), localState, loadProjectGraph, adoptObservedGraph)
+  const state = project.model?.state ?? localState
   const anchor = localState.anchors[String(sessionId)]
   const anchorActive = anchor !== undefined
+  const locked = busy || anchorBusy || anchorActive
 
+  // Declared after the adoption inside `useProjectGraph`, and held until the
+  // first Workspace read has settled: the Workspace graph knows which of this
+  // Chat's turns were copied from another Session, so adopting it first keeps
+  // those copies from being numbered as PAs of their own. A failed or absent
+  // Workspace read settles too, and the turns are then imported on their own.
   useEffect(() => {
-    if (projectModel !== null) adoptObservedGraph(projectModel.state)
-  }, [projectModel, adoptObservedGraph])
+    if (project.settled) syncTurns(turns)
+  }, [turnSignature, syncTurns, project.settled])
 
-  // Declared after the adoption above, and held until the first Workspace
-  // read has settled: the Workspace graph knows which of this Chat's turns
-  // were copied from another Session, so adopting it first keeps those copies
-  // from being numbered as PAs of their own. A failed or absent Workspace
-  // read settles too, and the turns are then imported on their own.
-  useEffect(() => {
-    if (projectSettled) syncTurns(turns)
-  }, [turnSignature, syncTurns, projectSettled])
-
-  const currentSessionIds = useMemo(() => sessionHistory(state, String(sessionId)), [state, sessionId])
-  const currentSessionKey = currentSessionIds.join('\u0000')
-  useEffect(() => {
-    if (selectionTouched) return
-    setBaselineIds(currentSessionIds)
-    setSelectedIds(currentSessionIds)
-  }, [currentSessionKey, selectionTouched])
-
-  useEffect(() => {
-    if (anchor === undefined) return
-    const fixed = anchor.nodeIds.filter(nodeId => state.nodes[nodeId] !== undefined)
-    setSelectedIds(fixed)
-    setCandidateId(null)
-    setInspectedId(null)
-    setSelectionTouched(true)
-  }, [anchor, state.nodes])
-
-  const sourcePathsChanged = baselineIds.some(id => selectionVia[id] !== undefined && selectionVia[id] !== String(sessionId))
-
-  // A candidate that was only inspected and then closed is not a lasting edit.
-  // Re-arm baseline following so a later official turn joins the blue history.
-  useEffect(() => {
-    if (selectionTouched && candidateId === null && sameIds(selectedIds, baselineIds) && !sourcePathsChanged) {
-      setSelectionTouched(false)
-    }
-  }, [selectionTouched, candidateId, selectedIds, baselineIds, sourcePathsChanged])
+  const selection = useContextSelection(state, String(sessionId), anchor, locked)
+  const { selectedIds, inspectedId } = selection
 
   const labels = useMemo(() => nodeLabelMap(state), [state])
-  const dirty = !anchorActive && (candidateId !== null || !sameIds(selectedIds, baselineIds) || sourcePathsChanged)
-  const previewId = candidateId !== null && !selectedIds.includes(candidateId) ? candidateId : null
-  const previewIndex = Math.min(Math.max(candidateIndex, 0), selectedIds.length)
-  const orderedPreviewIds = useMemo(() => previewId === null
-    ? selectedIds
-    : [...selectedIds.slice(0, previewIndex), previewId, ...selectedIds.slice(previewIndex)],
-  [selectedIds, previewId, previewIndex])
   // Keep the node label currency paired with the exact sources sent to the
   // Host. If a stale graph reference cannot resolve, filtering the pair
   // together prevents every later PA label from shifting by one.
-  const selectionSources = Object.fromEntries(orderedPreviewIds.map(id => [id,
-    selectionVia[id] ?? (currentSessionIds.includes(id) ? String(sessionId) : state.nodes[id]?.sessionId ?? ''),
-  ]))
-  const selectionRefs = contextReferences(state, orderedPreviewIds.filter(id => state.nodes[id] !== undefined), selectionSources)
-  const previewEntries = useMemo(() => orderedPreviewIds.flatMap(nodeId => {
-    const source = sourceOf(state, nodeId)
-    return source === null ? [] : [{ nodeId, source }]
-  }), [orderedPreviewIds, state])
+  const selectionRefs = contextReferences(
+    state, selectedIds.filter(id => state.nodes[id] !== undefined), selection.sources,
+  )
+  const previewEntries = useMemo(() => selectedIds.flatMap(nodeId => {
+    const node = state.nodes[nodeId]
+    return node === undefined ? [] : [{ nodeId, source: hostCoordinates(node) }]
+  }), [selectedIds, state])
   const previewNodeIds = useMemo(() => previewEntries.map(entry => entry.nodeId), [previewEntries])
-  const previewKey = previewEntries.map(({ source }) =>
-    `${source.sourceSessionId}:${source.sourceTurn}:${source.sourceBoundarySeq}`).join('|')
 
   // Only the Merge flight makes the official composer inert: the draft is being
   // transferred, and any edit during it aborts the transfer. A merely unmerged
@@ -234,94 +130,7 @@ export function GraphView({
     return () => { setComposerBlocked(false) }
   }, [busy, anchorBusy, setComposerBlocked, locale])
 
-  const overLimit = previewEntries.length > MAX_MERGED_HISTORY_TURNS
-
-  // Only PAs this view has never read are requested, and a request in flight
-  // is never cancelled by a later selection edit: its records stay valid for
-  // whatever selection is current when they land. Removing a PA is therefore
-  // pure local work, and re-adding one costs no Host round trip at all.
-  //
-  // The Host answers a batch as a whole, so one PA it cannot read fails the
-  // batch. The PAs of a failed batch are then read one by one: those that can
-  // be read appear, and the one that cannot is remembered as failed instead of
-  // being asked for again. Taking it out of the selection forgets the failure.
-  useEffect(() => {
-    const sources = previewEntries.map(entry => entry.source)
-    const selected = new Set(sources.map(previewSourceKey))
-    previewSelectedRef.current = selected
-    const failures = previewFailuresRef.current
-    for (const failed of [...failures.keys()]) {
-      if (!selected.has(failed)) failures.delete(failed)
-    }
-    if (sources.length === 0 || overLimit) {
-      setPreviewLoading(false)
-      return
-    }
-    const cache = previewCacheRef.current
-    const inFlight = previewInFlightRef.current
-
-    const request = (batch: readonly HistoryTurnSource[]): void => {
-      previewAbortRef.current ??= new AbortController()
-      const signal = previewAbortRef.current.signal
-      const keys = batch.map(previewSourceKey)
-      for (const key of keys) inFlight.add(key)
-      setPreviewLoading(true)
-      let retry: readonly HistoryTurnSource[] = []
-      void loadHistoryPreviewRef.current(batch, signal).then((response) => {
-        if (signal.aborted) return
-        cache.absorb(response)
-        setPreviewRevision(revision => revision + 1)
-      }).catch((cause: unknown) => {
-        if (signal.aborted) return
-        if (batch.length > 1) {
-          // One unreadable PA failed the whole batch; find out which.
-          retry = batch
-          return
-        }
-        failures.set(keys[0]!, cause instanceof Error ? cause.message : String(cause))
-        setPreviewRevision(revision => revision + 1)
-      }).finally(() => {
-        for (const key of keys) inFlight.delete(key)
-        if (signal.aborted) return
-        for (const source of retry) {
-          const key = previewSourceKey(source)
-          if (previewSelectedRef.current.has(key) && !cache.has(source) && !inFlight.has(key)) request([source])
-        }
-        setPreviewLoading(inFlight.size > 0)
-      })
-    }
-
-    const missing = cache.missing(sources).filter((source) => {
-      const key = previewSourceKey(source)
-      return !inFlight.has(key) && !failures.has(key)
-    })
-    if (missing.length === 0) setPreviewLoading(inFlight.size > 0)
-    else request(missing)
-  }, [previewKey, overLimit])
-
-  const preview = useMemo<HistoryPreviewResponse | null>(() => {
-    if (previewEntries.length === 0 || overLimit) return null
-    return previewCacheRef.current.assemble(previewEntries.map(entry => entry.source))
-  }, [previewEntries, overLimit, previewRevision])
-  const pendingNodeIds = useMemo(() => new Set(previewEntries.flatMap(entry =>
-    previewCacheRef.current.has(entry.source) || previewFailuresRef.current.has(previewSourceKey(entry.source))
-      ? []
-      : [entry.nodeId])),
-  [previewEntries, previewRevision])
-  // Derived from the selection, so it goes away with the PA it belongs to.
-  const previewError = useMemo(() => {
-    if (overLimit) {
-      return localized(
-        `单次 Merge 最多支持 ${MAX_MERGED_HISTORY_TURNS} 个 PA；请移除部分 PA。`,
-        `One Merge supports up to ${MAX_MERGED_HISTORY_TURNS} PAs. Remove some PAs to continue.`, locale,
-      )
-    }
-    for (const entry of previewEntries) {
-      const failure = previewFailuresRef.current.get(previewSourceKey(entry.source))
-      if (failure !== undefined) return failure
-    }
-    return null
-  }, [previewEntries, overLimit, previewRevision, locale])
+  const preview = useHistoryPreview(previewEntries, loadHistoryPreview, locale)
 
   // The graph only owns a turn once it closes, so everything after the last
   // registered turn is still being produced: that is exactly what the live
@@ -343,20 +152,7 @@ export function GraphView({
   })), [nodes, timeline, partial, runningCalls, registeredTurn, sessionId, locale])
 
   const inspect = (nodeId: TurnNodeId): void => {
-    if (busy || anchorBusy || anchorActive) return
-    setActionError(null)
-    setInspectedId(nodeId)
-  }
-
-  const closeInspector = (): void => {
-    const closingId = inspectedId
-    if (candidateId === inspectedId) setCandidateId(null)
-    setInspectedId(null)
-    if (closingId !== null) {
-      const trigger = [...document.querySelectorAll<HTMLButtonElement>('.dsh-git-tree-node')]
-        .find(button => button.dataset.nodeId === closingId)
-      trigger?.focus()
-    }
+    if (selection.inspect(nodeId)) setActionError(null)
   }
 
   // Stable identity: the rail is memoized, and a streaming delta must not
@@ -368,64 +164,9 @@ export function GraphView({
     target.focus({ preventScroll: true })
   }, [])
 
-  const addCandidate = (): void => {
-    if (busy || anchorBusy || anchorActive) return
-    if (inspectedId === null || state.nodes[inspectedId] === undefined) return
-    setSelectionVia(via => ({ ...via, [inspectedId]: state.nodes[inspectedId]!.sessionId }))
-    // Inspecting is read-only. Only this explicit action changes Context.
-    setSelectedIds((ids) => {
-      const identityId = paIdentityId(state, inspectedId)
-      const existingIndex = ids.findIndex(nodeId => paIdentityId(state, nodeId) === identityId)
-      if (existingIndex < 0) return [...ids, inspectedId]
-      if (ids[existingIndex] === inspectedId) return ids
-      const next = [...ids]
-      next[existingIndex] = inspectedId
-      return next
-    })
-    setCandidateId(null)
-    setSelectionTouched(true)
-  }
-
-  const remove = (nodeId: TurnNodeId): void => {
-    if (busy || anchorBusy || anchorActive) return
-    setSelectedIds(ids => ids.filter(id => id !== nodeId))
-    if (inspectedId === nodeId) setInspectedId(null)
-    if (candidateId === nodeId) setCandidateId(null)
-    setSelectionTouched(true)
-  }
-
-  // Reordering runs over the previewed order, then splits back into the
-  // committed selection and the candidate's place inside it.
-  const commitOrder = (next: readonly TurnNodeId[]): void => {
-    if (previewId !== null) setCandidateIndex(next.indexOf(previewId))
-    setSelectedIds(next.filter(id => id !== previewId))
-    setSelectionTouched(true)
-  }
-
-  const move = (nodeId: TurnNodeId, beforeId: TurnNodeId): void => {
-    if (busy || anchorBusy || anchorActive) return
-    if (nodeId === beforeId || !orderedPreviewIds.includes(nodeId)) return
-    const next = orderedPreviewIds.filter(id => id !== nodeId)
-    const index = next.indexOf(beforeId)
-    if (index < 0) return
-    next.splice(index, 0, nodeId)
-    commitOrder(next)
-  }
-
-  const moveEnd = (nodeId: TurnNodeId): void => {
-    if (busy || anchorBusy || anchorActive) return
-    if (!orderedPreviewIds.includes(nodeId)) return
-    commitOrder([...orderedPreviewIds.filter(id => id !== nodeId), nodeId])
-  }
-
   const discard = (send: boolean): void => {
     const composerAvailable = setComposerBlocked(false)
-    setSelectionVia({})
-    setSelectedIds(currentSessionIds)
-    setBaselineIds(currentSessionIds)
-    setSelectionTouched(false)
-    setCandidateId(null)
-    setInspectedId(null)
+    selection.reset(true)
     setActionError(send && !composerAvailable ? localized(
       '来源 Session 仍被其他系统条件阻塞；Context 更改已放弃，请解除阻塞后使用官方输入框发送。',
       'Another system condition still blocks the source Session. The context edits were discarded; resolve that block, then send with the official composer.', locale,
@@ -434,7 +175,7 @@ export function GraphView({
   }
 
   const merge = async (): Promise<void> => {
-    if (busy || anchorBusy || anchorActive || selectedIds.length === 0 || candidateId !== null) return
+    if (locked || selectedIds.length === 0) return
     if (input.phase !== 'plain') {
       setActionError(localized(
         '官方输入框正在处理另一项操作；请等待输入状态稳定后再 Merge。',
@@ -449,12 +190,8 @@ export function GraphView({
       ))
       return
     }
-    const controller = new AbortController()
-    mergeAbortRef.current?.abort()
-    mergeAbortRef.current = controller
-    setBusy(true)
     setActionError(null)
-    try {
+    await runMerge(async (signal) => {
       if (input.occurrences.length > 0) {
         throw new Error(localized(
           '输入草稿包含 @ 引用或其他结构化 chip；请先移除或转换为普通文本再 Merge。',
@@ -462,68 +199,27 @@ export function GraphView({
         ))
       }
       await createMergedSession(selectedIds, {
-        contextRefs: contextReferences(state, selectedIds, selectionSources),
+        contextRefs: contextReferences(state, selectedIds, selection.sources),
         text: input.draft,
         draftRevision: input.draftRev,
         attachmentIds: input.attachmentIds,
         hasStructuredReferences: false,
-      }, controller.signal)
-    } catch (cause: unknown) {
-      if (!isAbort(cause, controller.signal)) {
-        setActionError(cause instanceof Error ? cause.message : String(cause))
-      }
-    } finally {
-      if (mergeAbortRef.current === controller) mergeAbortRef.current = null
-      setBusy(false)
-    }
+      }, signal)
+    })
   }
 
   const toggleAnchor = async (): Promise<void> => {
     if (busy || anchorBusy) return
     setActionError(null)
     if (anchorActive) {
-      const controller = new AbortController()
-      anchorAbortRef.current = controller
-      setAnchorBusy(true)
-      try {
-        await cancelAnchor(controller.signal)
-        setSelectedIds(currentSessionIds)
-        setBaselineIds(currentSessionIds)
-        setSelectionTouched(false)
-        setCandidateId(null)
-        setInspectedId(null)
-      } catch (cause: unknown) {
-        if (!isAbort(cause, controller.signal)) {
-          setActionError(cause instanceof Error ? cause.message : String(cause))
-        }
-      } finally {
-        if (anchorAbortRef.current === controller) anchorAbortRef.current = null
-        setAnchorBusy(false)
-      }
-      return
-    }
-    if (candidateId !== null) {
-      setActionError(localized(
-        '请先加入或关闭绿色预览 PA，再固定锚点。',
-        'Add or close the green preview PA before fixing the anchor.', locale,
-      ))
+      await runAnchor(async (signal) => {
+        await cancelAnchor(signal)
+        selection.reset(false)
+      })
       return
     }
     if (selectedIds.length === 0 || selectedIds.length > MAX_MERGED_HISTORY_TURNS) return
-    const controller = new AbortController()
-    anchorAbortRef.current?.abort()
-    anchorAbortRef.current = controller
-    setAnchorBusy(true)
-    try {
-      await activateAnchor(selectedIds, controller.signal)
-    } catch (cause: unknown) {
-      if (!isAbort(cause, controller.signal)) {
-        setActionError(cause instanceof Error ? cause.message : String(cause))
-      }
-    } finally {
-      if (anchorAbortRef.current === controller) anchorAbortRef.current = null
-      setAnchorBusy(false)
-    }
+    await runAnchor(async (signal) => { await activateAnchor(selectedIds, signal) })
   }
 
   const inspected = inspectedId === null ? undefined : state.nodes[inspectedId]
@@ -532,15 +228,15 @@ export function GraphView({
   // identity changes, which must not happen on every streamed delta.
   const canvasState = useMemo<GraphState>(() => ({
     ...state,
-    headNodeId: baselineIds.at(-1) ?? state.headNodeId,
+    headNodeId: selection.baselineIds.at(-1) ?? state.headNodeId,
     contextManifest: [],
-  }), [state, baselineIds])
+  }), [state, selection.baselineIds])
   const rail = useMemo(() => historyRailModel(state, {
     selectedIds,
-    candidateId,
+    candidateId: null,
     headNodeId: canvasState.headNodeId,
     orderedIds: previewNodeIds,
-  }), [state, selectedIds, candidateId, canvasState.headNodeId, previewNodeIds])
+  }), [state, selectedIds, canvasState.headNodeId, previewNodeIds])
   useEffect(() => {
     if (activeTrailId !== null && !previewNodeIds.includes(activeTrailId)) setActiveTrailId(null)
   }, [activeTrailId, previewNodeIds])
@@ -549,18 +245,18 @@ export function GraphView({
     state,
     contextRefs: selectionRefs,
     selectedIds,
-    orderedIds: orderedPreviewIds,
-    candidateId,
+    orderedIds: selectedIds,
+    candidateId: null,
     busy: busy || anchorBusy,
     anchored: anchorActive,
     anchorWorkspaceTitle: anchor?.workspaceTitle,
     error: actionError,
-    dirty,
+    dirty: selection.dirty,
     draftHasContent,
     overLimit: selectedIds.length > MAX_MERGED_HISTORY_TURNS,
-    onMove: move,
-    onMoveEnd: moveEnd,
-    onRemove: remove,
+    onMove: selection.move,
+    onMoveEnd: selection.moveEnd,
+    onRemove: selection.remove,
     onMerge: merge,
     onDiscard: discard,
     onSendRefused: () => {
@@ -595,16 +291,16 @@ export function GraphView({
           <header className="dsh-git-heading">
             <span>Conversation Graph</span>
             <span className="dsh-git-legend">
-              {projectError === null ? <>
+              {project.error === null ? <>
                 <span className="dsh-git-legend-bar" aria-hidden="true" />
                 <span>{localized('已加入', 'Included', locale)}</span>
-              </> : <span className="dsh-git-muted">{projectError}</span>}
+              </> : <span className="dsh-git-muted">{project.error}</span>}
               <button
                 className="dsh-git-anchor-button"
                 data-active={anchorActive ? '' : undefined}
                 type="button"
                 aria-pressed={anchorActive}
-                disabled={anchorBusy || busy || (!anchorActive && (selectedIds.length === 0 || candidateId !== null))}
+                disabled={anchorBusy || busy || (!anchorActive && selectedIds.length === 0)}
                 title={anchorActive
                   ? localized(`取消锚点；「${anchor.workspaceTitle}」会保留，再次锚定同一组 PA 时继续使用`, `Cancel anchor; “${anchor.workspaceTitle}” is kept and reused when the same PAs are anchored again`, locale)
                   : localized('固定蓝色 PA，并创建隔离的并列问题 Workspace', 'Fix the blue PAs and create an isolated Workspace for parallel questions', locale)}
@@ -623,9 +319,9 @@ export function GraphView({
             state={canvasState}
             previewNodeId={inspectedId}
             selectedNodeIds={selectedIds}
-            candidateNodeId={candidateId}
+            candidateNodeId={null}
             anchoredNodeIds={anchor?.nodeIds}
-            disabled={busy || anchorBusy || anchorActive}
+            disabled={locked}
             onPreview={inspect}
           />
         </section>
@@ -634,10 +330,10 @@ export function GraphView({
           nodeId={inspectedId}
           label={labels.get(inspectedId) ?? 'PA'}
           selected={inspectedSelected}
-          disabled={busy || anchorBusy || anchorActive}
-          onAdd={addCandidate}
-          onRemove={() => remove(inspectedId)}
-          onClose={closeInspector}
+          disabled={locked}
+          onAdd={selection.addInspected}
+          onRemove={() => selection.remove(inspectedId)}
+          onClose={selection.closeInspector}
         />}
       </div>}
       <section className="dsh-git-chat-panel" aria-label="Chat History">
@@ -659,7 +355,6 @@ export function GraphView({
           </span>
           <span className="dsh-git-muted">
             {selectedIds.length} {localized('已加入', 'included', locale)}
-            {candidateId === null ? '' : localized(' + 1 预览', ' + 1 preview', locale)}
           </span>
         </header>
         <div className={`dsh-git-chat-body ${rail.entries.length === 0
@@ -673,15 +368,15 @@ export function GraphView({
             onActiveChange={setActiveTrailId}
           />
           <ChatHistoryPreview
-            response={preview}
+            response={preview.response}
             orderedNodeIds={previewNodeIds}
             labels={labels}
-            candidateNodeId={candidateId}
+            candidateNodeId={null}
             activeNodeId={activeTrailId}
-            pendingNodeIds={pendingNodeIds}
+            pendingNodeIds={preview.pendingNodeIds}
             liveTurns={liveTurns}
-            loading={previewLoading}
-            error={previewError}
+            loading={preview.loading}
+            error={preview.error}
             loadImage={loadPreviewImage}
           />
         </div>
