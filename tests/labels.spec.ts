@@ -13,6 +13,24 @@ describe('nodeLabelMap', () => {
     expect(labels.get('source')).toBe('PA7')
     expect(labels.get('child')).toBe('S1.1')
   })
+
+  it('labels a copy of a fork copy as one fork of the original PA', () => {
+    // A Chat forked from a Session whose own tip is a fork copy: the copy it
+    // registers points at that copy, not at the original.
+    const original = node({ id: 'original', createdAt: 1, ledgerOrdinal: 2, finalOrdinal: 1 })
+    const copy = node({
+      id: 'copy', sessionId: 'fork', createdAt: 2, ledgerOrdinal: 2, finalOrdinal: 2, forkSourceId: 'original',
+    })
+    const copyOfCopy = node({
+      id: 'copy-of-copy', sessionId: 'dsh-git-child', createdAt: 3, ledgerOrdinal: 2, finalOrdinal: 3,
+      forkSourceId: 'copy',
+    })
+    const labels = nodeLabelMap(graph([original, copy, copyOfCopy]))
+
+    expect(labels.get('original')).toBe('PA2')
+    expect(labels.get('copy')).toBe('PA2 fork')
+    expect(labels.get('copy-of-copy')).toBe('PA2 fork')
+  })
 })
 
 describe('nodeHash', () => {

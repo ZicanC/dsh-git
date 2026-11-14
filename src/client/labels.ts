@@ -1,4 +1,4 @@
-import { orderedNodes } from './graph.ts'
+import { orderedNodes, paIdentityId } from './graph.ts'
 import type { GraphState, TurnNodeId } from './types.ts'
 
 /** Assign the same creation-order PA number everywhere the graph is rendered. */
@@ -24,7 +24,9 @@ export function nodeLabelMap(state: GraphState): ReadonlyMap<TurnNodeId, string>
   }
   for (const node of nodes) {
     if (node.forkSourceId === undefined) continue
-    labels.set(node.id, `${labels.get(node.forkSourceId) ?? 'PA'} fork`)
+    // Named after the original PA, not after the copy it was taken from: a
+    // copy of a copy is still one fork of that PA.
+    labels.set(node.id, `${labels.get(paIdentityId(state, node.id)) ?? 'PA'} fork`)
   }
   return labels
 }
