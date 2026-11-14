@@ -29,18 +29,18 @@ Each completed Prompt + Answer turn is a commit. You can cherry-pick turns from 
 - **Chat History preview:** The right side shows the complete chat history the current selection would produce, in tray order, including tool calls and the turn that is still streaming. You see what the new Chat's history will be before you Fork or Merge.
 - **Ordered Context Tray:** The tray docks above the official composer. Only PAs you explicitly add enter the new history, and dragging the chips sets the order sent to the model. One PA takes one slot; choosing another fork copy of it replaces that slot in place.
 - **Fork and Merge:** A selection from one Session is a Fork; a selection that spans Sessions is a Merge. The button label, the parent relations in the graph, and the lines drawn all come from the same decision. A Merge has one incoming line per source Session; the other selected PAs are Context and draw no line.
-- **Official fork deduplication:** A fork created through the official Harness feature shares the history prefix it inherited. The copied tip appears as a copy with a `FORK` badge that keeps the original PA number, and later PAs continue beneath it.
+- **Official fork deduplication:** A fork created through the official Harness feature shares the history prefix it inherited, provided its log records which Session it came from. The copied tip appears as a copy with a `FORK` badge that keeps the original PA number, and later PAs continue beneath it. Harness stopped recording that source in 0.2.1-rc.3; see "Known limitations".
 - **Anchor mode:** **Anchor** freezes the current selection. From then on, every question sent from this Chat opens its own independent child Session in a dedicated Anchor Workspace, seeded with the frozen PAs. Use it to ask several parallel questions against one context.
 - **Workspace project graph:** Hover over a Workspace row and click its graph button to view every completed PA in that Workspace. The project graph takes over the main column, is read-only, and does not change the current Session. The **PA timeline** at the bottom is ordered by completion time; drag it left to watch the graph grow.
 - **Host-side persistence:** Each Workspace folder has an independent graph ledger that follows the DSH profile and does not depend on the current browser. Sessions outside every folder each use an isolated ledger.
 
 ## Version requirements
 
-This plugin targets **DeepSeek Harness 0.1.2-rc.1** (tag `dsh-v0.1.2-rc.1`). Type checking, tests, and the `lib/` build are all made against that version.
+This plugin targets **DeepSeek Harness 0.2.2-rc.3**, as found on the Harness `master` branch at commit `39163dd30f`. Type checking, tests, and the `lib/` build are all made against that commit. The tag `dsh-v0.2.2-rc.3` is 608 commits older; the Harness interfaces this plugin uses are the same there, but nothing has been built or run against the tag.
 
-The Harness `master` branch (0.2.2) has removed the `@deepseek-ai/dsh-agent-presets` package this plugin depends on, and its Session events and composer interface have changed, so the plugin does not build there. Porting to a newer Harness is separate work.
+Harness 0.1.2 is no longer supported: the plugin now relies on Session format v4 events, the retained Session references of the browser Session Controller, and the `@deepseek-ai/dsh-agent-preset-registry` package, none of which exist there. The last commit that builds against `dsh-v0.1.2-rc.1` is `3c468a3`.
 
-Node `^22.19.0 || >=24.0.0` is required. This Harness version pins pnpm 11.7.0; the commands below call it through `corepack`.
+Node `^22.19.0 || >=24.0.0` is required. This Harness version pins pnpm 11.28.5; the commands below call it through `corepack`.
 
 ## Install
 
@@ -48,13 +48,16 @@ Node `^22.19.0 || >=24.0.0` is required. This Harness version pins pnpm 11.7.0; 
 
 ```bash
 git clone https://github.com/deepseek-ai/deepseek-harness.git ../deepseek-harness
-git -C ../deepseek-harness checkout dsh-v0.1.2-rc.1
+git -C ../deepseek-harness checkout 39163dd30f
 corepack pnpm --dir ../deepseek-harness install
+corepack pnpm --dir ../deepseek-harness run build:native-system
 corepack pnpm --dir ../deepseek-harness run build:lib
 corepack pnpm --dir ../deepseek-harness run build:web
 ```
 
-`build:lib` produces the packages the plugin's links point at. `build:web` produces the web frontend; without it the Web UI serves a 404.
+`build:native-system` compiles the file-lock addon Harness loads when a turn runs; it needs a C compiler and the Node headers, and without it every turn fails with `Cannot find module … system.node`. `build:lib` produces the packages the plugin's links point at. `build:web` produces the web frontend; without it the Web UI serves a 404.
+
+When switching an existing Harness checkout from another version, remove its stale `lib/` directories and leftover package folders before building; they break the bundler.
 
 Then build and install the plugin:
 
@@ -159,6 +162,7 @@ Source layout:
 - `src/client/repository.ts`: the browser ledger's read, write queue, and subscription.
 - `src/client/ledger-transitions.ts`: pure ledger transitions—importing a Session, recognising official forks, registering a new Chat, and adopting the project graph.
 - `src/client/project-graph.ts`: project graph assembly.
+- `src/client/draft-attachments.ts`: re-staging a draft's uploads for the Session it moves to.
 - `src/client/GraphView.tsx`, `GraphCanvas.tsx`, `ContextTray.tsx`, `ChatHistoryPreview.tsx`, and the rest: the interface.
 
 Tests by layer:
@@ -167,7 +171,7 @@ Tests by layer:
 - **Host:** `history.spec.ts` (seed composition, identity checks, the `ignorable` provenance event), `merge-rpc.spec.ts` (the Fork, Merge, and anchor RPC flows end to end), `project-history.spec.ts`, `history-preview.spec.ts`.
 - **Project graph:** `project-graph.spec.ts`, `project-page.spec.tsx`, `project-bridge.spec.tsx`.
 - **Interface:** `components.spec.tsx`, `graph-canvas-design.spec.tsx`, `graph-canvas-selection.spec.tsx`, `graph-canvas-zoom.spec.tsx`, `history-rail.spec.tsx`, `chat-history-preview.spec.tsx`, `preview-markdown.spec.tsx`, `preview-cache.spec.ts`, `live-turn.spec.ts`, `extract.spec.ts`.
-- **Composer and tray:** `composer-send-guard.spec.ts`, `composer-discard-action.spec.tsx`, `composer-block-lease.spec.ts`, `context-tray-channel.spec.ts`, `context-tray-dock.spec.tsx`, `context-tray-slot.spec.ts`, `anchor-client.spec.ts`.
+- **Composer and tray:** `composer-send-guard.spec.ts`, `composer-discard-action.spec.tsx`, `composer-block-lease.spec.ts`, `context-tray-channel.spec.ts`, `context-tray-dock.spec.tsx`, `context-tray-slot.spec.ts`, `anchor-client.spec.ts`, `merge-client.spec.ts` (creating a Chat on retained Session references and moving its draft), `draft-attachments.spec.ts`.
 
 To run a smoke test without touching your real DSH profile, point `DSH_HOME` at a temporary directory:
 
@@ -183,11 +187,14 @@ The configuration output must end with a `# == dsh-git` layer. The page that ope
 ## Known limitations
 
 - `dsh-git` does not automatically decide whether a piece of history is correct, trustworthy, or useful. It provides context visualization, provenance, selection, and composition; the final judgment remains with the user.
-- Only Harness 0.1.2-rc.1 is supported; see "Version requirements".
+- Only Harness 0.2.2-rc.3 is supported; see "Version requirements".
+- Since Harness 0.2.1-rc.3 an official fork no longer records the Session it was forked from, and nothing in its log names the source. Such a fork appears in the graph as an independent Session whose inherited turns carry their own PA numbers, and the Host cannot tell that one of them and its original are the same PA. Official forks made by older Harness versions keep their recorded source and are still folded. Forks and Merges created through dsh-git are unaffected: they write their own provenance.
+- Upgrading a profile that already holds dsh-git data from Harness 0.1.2 has not been tested. Harness migrates old Session logs to format v4 and renumbers their events on the way, while the ledger and the `dsh-git/merge` event store event positions.
 - The ledger does not synchronize across tabs. With two tabs open on one Workspace, the later writer is refused by the Host and the page shows a notice asking for a reload; reloading restores it.
 - The PA Context Window of an ordinary turn reads "Actual request Context is unknown". The ledger records only the Context explicitly selected for a Fork or Merge, and does not infer what an ordinary turn carried from its visible parent chain.
-- An official fork is recognised by matching Prompt and Answer text at the same turn numbers in the child and parent Sessions. When the child is read before its parent, it is folded only once the parent is in the ledger too.
+- An official fork that records its source is recognised by matching Prompt and Answer text at the same turn numbers in the child and parent Sessions. When the child is read before its parent, it is folded only once the parent is in the ledger too.
 - The Host creates the new Session and the browser registers it in the ledger afterwards; there is no transaction across the two. If the browser's registration is lost, the project graph still restores the parents from the `dsh-git/merge` event in the log. Merge Sessions older than that event depend on the ledger alone.
 - Only selected completed turns are written into the new Session's seed; unselected ancestor turns are not inherited implicitly. Core trajectory events are copied, while source-plugin-specific log-only events are excluded.
 - A draft containing `@` references or other structured content cannot be forked, merged, or sent as an anchored question.
+- Harness uploads a draft image for the Session it was added to. Moving it into the new Chat stages the upload again through a member of the Harness Conversation service that is outside its published interface. On a Harness build without that member, a draft with images is refused and stays where it is; a text-only draft still moves.
 - Lines in the graph may cross each other and may pass through nodes; there is no obstacle avoidance.

@@ -6,7 +6,7 @@
 
 ## Build, Test, and Development Commands
 
-- `pnpm install` installs dependencies; development links expect a sibling `../deepseek-harness` checkout at tag `dsh-v0.1.2-rc.1`, installed and built with `corepack pnpm run build:lib` (and `build:web` to open the UI). Harness `master` no longer has the packages this plugin links to.
+- `pnpm install` installs dependencies; development links expect a sibling `../deepseek-harness` checkout of Harness 0.2.2-rc.3 (`master` at commit `39163dd30f`), installed and built with `corepack pnpm run build:lib` (plus `build:web` to open the UI and `build:native-system` to run a turn). Harness 0.1.2 no longer has the interfaces this plugin uses.
 - `pnpm typecheck` runs strict TypeScript checks without emitting files.
 - `pnpm test` runs the Vitest suite once; `pnpm test:watch` supports local iteration.
 - `pnpm build` emits declarations and bundles Host and browser entries into `lib/`.
