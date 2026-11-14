@@ -26,10 +26,10 @@
 ## 主要功能
 
 - **Conversation Graph：** 每个会话的 **分支** 标签页左侧是一张紧凑的对话图。点节点只是检查：打开 PA Context Window，显示它的 Prompt、Answer 和回答时使用的 Context，不改变选择，也不切换会话。
-- **Chat History 预览：** 标签页右侧按托盘顺序显示当前选择合并后的完整聊天记录，包括工具调用和正在生成的回合。Fork 或 Merge 之前就能看到新 Chat 的历史会是什么样。
+- **Chat History 预览：** 标签页右侧按托盘顺序显示当前选择合并后的完整聊天记录，包括工具调用和正在生成的回合。Fork 或 Merge 之前就能看到新 Chat 的历史会是什么样。每个 PA 只向宿主端读取一次；其中一个读不出来时只有它显示错误，其余照常显示。
 - **有序的 Context Tray：** 托盘停靠在官方输入框上方。只有明确加入的 PA 才会进入新历史；拖动标签可以调整发送给模型的顺序。同一个 PA 只占一格，改选它的另一个 fork 副本时原位替换。
 - **Fork 与 Merge：** 选择只来自一个会话是 Fork，来自多个会话是 Merge。按钮名称、图上的父关系和连线来自同一份判定。Merge 的每条来源会话只有一条入线，其余选中的 PA 属于 Context，不成线。
-- **官方 fork 去重：** 通过 Harness 官方功能创建的 fork，只要日志里记录了它来自哪个会话，就会共享继承的历史前缀。复制出的末端回合显示为带 `FORK` 徽标的副本，沿用原 PA 的编号，后续 PA 从这个副本往下延伸。Harness 从 0.2.1-rc.3 起不再记录这个来源，见「已知限制」。
+- **官方 fork 去重：** 通过 Harness 官方功能创建的 fork 与它的来源会话共享继承的历史前缀。复制出的末端回合显示为带 `FORK` 徽标的副本，沿用原 PA 的编号，后续 PA 从这个副本往下延伸。Harness 从 0.2.1-rc.3 起不再记录 fork 的来源，插件通过逐事件比对日志把它找回来；来源必须在同一个 Workspace 里，见「已知限制」。
 - **锚定模式：** 点 **锚定** 冻结当前选择。此后从这个 Chat 发出的每个问题，都会在专用的 Anchor Workspace 里各开一个独立的子会话，以冻结的 PA 为历史。适合对同一份上下文并列地问多个问题。
 - **Workspace 项目图：** 把鼠标悬停在 Workspace 行上，点图按钮查看该 Workspace 里所有已完成的 PA。项目图接管主栏、只读，不切换当前会话。底部的 **PA 时间轴** 按完成时间排列，向左拖动可以回看图是怎样长出来的。
 - **宿主端持久化：** 每个 Workspace 文件夹有一份独立的图账本，随 DSH 配置保存，不依赖当前浏览器。不属于任何文件夹的会话各自使用独立账本。
@@ -95,7 +95,7 @@ corepack pnpm --dir ../deepseek-harness dsh plugin --profile web remove dsh-git
 
 1. 选好 PA，点 Conversation Graph 标题栏的 **锚定**。
 2. 插件在当前 Workspace 目录下创建一个 `dsh-git-anchors-…` 子目录，并把它登记为 Anchor Workspace。
-3. 之后从这个 Chat 发出的每个问题，都在 Anchor Workspace 里各开一个独立子会话。原会话不变。
+3. 之后从这个 Chat 发出的每个问题，都在 Anchor Workspace 里各开一个独立子会话。原会话不变。问题要等宿主端收下才从输入框清空；被拒收时它连同附件留在原处，输入框会提示。
 4. 再点一次按钮取消锚定。Anchor Workspace 会保留；再次锚定同一组 PA 时继续使用它。
 
 Anchor Workspace 的项目图里，冻结的 PA 保留原编号，各子会话自己的回合标为 `S<n>.<m>`。
@@ -130,17 +130,19 @@ DSH 会话日志按时间顺序追加，已有记录不会被改写。`dsh-git` 
 
 ## 宿主端历史合成
 
-浏览器通过私有 RPC 只发送所选来源的坐标：`sessionId`、回合号和已完成回合的边界，外加选中时所沿的会话。宿主端先沿日志里的精确来源关系核对每个坐标的身份——同一个 PA 被选了两次，或者某个坐标并不属于它声称的会话历史，都会整笔拒绝，不创建任何东西。通过之后，宿主端读取规范会话日志，按托盘顺序重新编号所选回合，以这份结构完整的种子创建新 agent，并把新会话加入来源会话所在的 Workspace。
+浏览器通过私有 RPC 只发送所选来源的坐标：`sessionId`、回合号和已完成回合的边界，外加选中时所沿的会话。宿主端先沿日志里的精确来源关系核对每个坐标的身份——同一个 PA 被选了两次，或者某个坐标并不属于它声称的会话历史，都会整笔拒绝，不创建任何东西。核对身份时，官方 fork 继承来的回合算作来源会话的同一个 PA。通过之后，宿主端读取规范会话日志，按托盘顺序重新编号所选回合，以这份结构完整的种子创建新 agent，把新会话加入来源会话所在的 Workspace，并告诉浏览器每个回合在新会话日志里的位置。
 
 这一过程只改变对话历史。文件仍由整个 Workspace 共享，不随对话分支一同分叉。
 
 ## 项目图的数据读取
 
-宿主端在 `/dsh-git` 下注册一个私有的 trusted-host Connection RPC。项目图请求只携带 Workspace id。宿主端读取该 Workspace 登记的全部会话的完整规范日志，返回标准化的已完成 PA 记录：开始与完成时间、fork 种子边界、内容指纹和 merge 溯源。尚未完成的回合不会返回。
+宿主端在 `/dsh-git` 下注册一个私有的 trusted-host Connection RPC。项目图请求只携带 Workspace id。宿主端读取该 Workspace 登记的全部会话的完整规范日志，返回标准化的已完成 PA 记录：开始与完成时间、fork 种子边界、内容指纹、merge 溯源，以及官方 fork 的来源会话。尚未完成的回合不会返回；某个会话的日志读不出来时，只跳过这一个会话。
 
-浏览器把响应与账本拼成一张图并并入账本。dsh-git 创建的会话按日志里的精确坐标还原父关系；官方 fork 的继承回合并入父会话的节点，末位显示为 fork 副本；来源不明的旧复制回合保持独立，不猜边。
+官方 fork 的来源是比对出来的：fork 的种子是来源日志一段前缀的逐事件拷贝，宿主端在同一个 Workspace 里找出开头与这段前缀完全相同、并且亲自写下其中最后一个事件的那个会话。比的是事件，不是文字。
 
-DeepSeek Harness 目前没有开放项目行操作或项目页插槽，因此项目图按钮与主栏接管集中在一个兼容桥里，通过语义化 DOM 属性和 `MutationObserver` 实现。输入框发送拦截同理，工作在输入框卡片的 DOM 边缘。如果 Harness 的侧边栏或输入框 DOM 发生变化，这两处适配可能需要更新；PA 数据协议和图页面不受影响。
+浏览器把响应与账本拼成一张图并并入账本，然后才导入当前 Chat 自己的回合，这样 fork 复制来的回合不会先被当成新的 PA 编号。dsh-git 创建的会话按日志里的精确坐标还原父关系；官方 fork 的继承回合并入来源会话的节点，末位显示为 fork 副本；来源不明的复制回合保持独立，不猜边。
+
+DeepSeek Harness 目前没有开放项目行操作或项目页插槽，因此项目图按钮与主栏接管集中在一个兼容桥里，通过语义化 DOM 属性和 `MutationObserver` 实现。输入框发送拦截同理，工作在输入框卡片的 DOM 边缘，认 Harness 0.2 的富文本输入框，也认更早的 `<textarea>`。如果 Harness 的侧边栏或输入框 DOM 发生变化，这两处适配可能需要更新；PA 数据协议和图页面不受影响。
 
 ## 开发与测试
 
@@ -155,23 +157,39 @@ pnpm pack
 
 源码结构：
 
+宿主端与两端共用：
+
 - `src/index.ts`：宿主端插件，注册 RPC、合成会话种子、读写账本。
 - `src/graph-ledger.ts`：两端共用的账本逻辑——身份、编号定稿、语义校验、节点替换与修复。
 - `src/history.ts`、`src/merge-lineage.ts`、`src/project-history.ts`、`src/history-preview.ts`：宿主端的历史合成、溯源事件和日志投影。
+- `src/fork-origin.ts`：从日志里找回官方 fork 的来源会话。
 - `src/protocol.ts`：RPC 端点和严格解码器。
+
+浏览器端的数据与流程：
+
+- `src/client/index.ts`：插件入口，只做装配——向各插槽注册组件，并把账本和宿主端接到它们手上。
 - `src/client/repository.ts`：浏览器端账本的读取、写入队列和订阅。
 - `src/client/ledger-transitions.ts`：账本的纯状态转换——导入会话、识别官方 fork、登记新 Chat、并入项目图。
+- `src/client/host-rpc.ts`、`workspace-graph.ts`：对宿主端各端点的带类型调用，以及项目图的读取。
+- `src/client/merged-chat.ts`：创建新 Chat（Fork 或 Merge）并转移草稿。
+- `src/client/anchor-mode.ts`：锚定、取消锚定、派发锚定问题。
+- `src/client/session-handoff.ts`、`draft-attachments.ts`：持有刚创建的会话、转移草稿附件并为新会话重新上传、等待宿主端收下一次发送。
 - `src/client/project-graph.ts`：项目图的组装。
-- `src/client/draft-attachments.ts`：草稿转移到另一个会话时，为它重新上传附件。
-- `src/client/GraphView.tsx`、`GraphCanvas.tsx`、`ContextTray.tsx`、`ChatHistoryPreview.tsx` 等：界面。
+
+界面：
+
+- `src/client/GraphView.tsx`：Branches 视图，由四个 hook 组合而成——`use-project-graph.ts`（项目图）、`use-context-selection.ts`（Context 选择）、`use-history-preview.ts`（Chat History 的读取与缓存）、`use-busy-action.ts`（可中止的操作）。
+- `src/client/GraphCanvas.tsx`、`tree-layout.ts`、`pan-zoom.ts`：对话图的渲染、行列布局与连线、平移缩放。
+- `src/client/ChatHistoryPreview.tsx`、`PreviewRecords.tsx`、`preview-text.ts`、`stick-to-bottom.ts`：Chat History 面板、各类记录的行组件、摘要文字、贴底滚动。
+- `src/client/ContextTray.tsx`、`ComposerDiscardAction.tsx`、`composer-send-guard.ts`、`HistoryRail.tsx`、`ProjectGraphPage.tsx` 等：托盘、输入框旁的操作与发送拦截、历史导轨、项目图页面。
 
 测试按层分布：
 
 - **账本：** `graph-integrity.spec.ts`（fork 编号、一个会话一个出现位置、旧账本修复、无谓写入）、`graph-correctness.spec.ts`（定稿顺序、Context 引用、版本检查）、`repository.spec.ts`、`workspace-repositories.spec.ts`、`graph-domain.spec.ts`、`graph-medium.spec.ts`（真实 JSON 存储后端的读写往返）、`graph.spec.ts`、`labels.spec.ts`。
-- **宿主端：** `history.spec.ts`（种子合成、身份校验、`ignorable` 溯源事件）、`merge-rpc.spec.ts`（Fork、Merge 和锚定的 RPC 全流程）、`project-history.spec.ts`、`history-preview.spec.ts`、`seed-head.spec.ts`（种子必须以系统提示词开头，日志才能读回）。
+- **宿主端：** `history.spec.ts`（种子合成、身份校验、`ignorable` 溯源事件）、`merge-rpc.spec.ts`（Fork、Merge 和锚定的 RPC 全流程）、`fork-origin.spec.ts`（找回官方 fork 的来源、经由 fork 选中的 PA、读不出来的会话）、`project-history.spec.ts`、`history-preview.spec.ts`、`seed-head.spec.ts`（种子必须以系统提示词开头，日志才能读回）。
 - **项目图：** `project-graph.spec.ts`、`project-page.spec.tsx`、`project-bridge.spec.tsx`。
-- **界面：** `components.spec.tsx`、`graph-canvas-design.spec.tsx`、`graph-canvas-selection.spec.tsx`、`graph-canvas-zoom.spec.tsx`、`history-rail.spec.tsx`、`chat-history-preview.spec.tsx`、`preview-markdown.spec.tsx`、`preview-cache.spec.ts`、`live-turn.spec.ts`、`extract.spec.ts`。
-- **输入框与托盘：** `composer-send-guard.spec.ts`、`composer-discard-action.spec.tsx`、`composer-block-lease.spec.ts`、`context-tray-channel.spec.ts`、`context-tray-dock.spec.tsx`、`context-tray-slot.spec.ts`、`anchor-client.spec.ts`、`merge-client.spec.ts`（在会话引用上创建新 Chat 并转移草稿）、`draft-attachments.spec.ts`。
+- **界面：** `components.spec.tsx`（选择、Fork/Merge、锚定、Chat History 的读取）、`fork-lineage-client.spec.tsx`（先并入项目图再导入回合）、`tree-layout.spec.ts`、`preview-text.spec.ts`、`graph-canvas-design.spec.tsx`、`graph-canvas-selection.spec.tsx`、`graph-canvas-zoom.spec.tsx`、`history-rail.spec.tsx`、`chat-history-preview.spec.tsx`、`preview-markdown.spec.tsx`、`preview-cache.spec.ts`、`live-turn.spec.ts`、`extract.spec.ts`。
+- **输入框与托盘：** `composer-send-guard.spec.ts`、`composer-discard-action.spec.tsx`、`composer-block-lease.spec.ts`、`context-tray-channel.spec.ts`、`context-tray-dock.spec.tsx`、`context-tray-slot.spec.ts`、`anchor-client.spec.ts`（锚定与派发，包括被拒收的问题）、`merge-client.spec.ts`（在会话引用上创建新 Chat 并转移草稿）、`draft-attachments.spec.ts`、`host-rpc.spec.ts`。
 
 如需在不修改真实 DSH 配置的情况下冒烟测试，把 `DSH_HOME` 指到一个临时目录：
 
@@ -188,11 +206,11 @@ corepack pnpm --dir ../deepseek-harness dsh --profile web --port 0
 
 - `dsh-git` 不会自动判断某段历史是否正确、可信或有用。它提供上下文的可视化、溯源、选择和重组能力，最终判断仍由使用者完成。
 - 只支持 Harness 0.2.2-rc.3，见「版本要求」。
-- 从 Harness 0.2.1-rc.3 起，官方 fork 不再记录它是从哪个会话 fork 出来的，日志里也没有任何字段指向来源。这样的 fork 在图上是一个独立的会话，继承来的回合各自占用 PA 编号，宿主端也无法判断其中一个和它的原件是同一个 PA。旧版 Harness 创建的官方 fork 保留了来源记录，仍然会被折叠。通过 dsh-git 创建的 Fork 和 Merge 不受影响：它们自己写入来源。
-- 没有测试过带着 Harness 0.1.2 时期的 dsh-git 数据升级配置目录。Harness 会把旧会话日志迁移到格式 v4 并在迁移中重新编号事件，而账本和 `dsh-git/merge` 事件保存的是事件位置。
+- 官方 fork 的来源只在同一个 Workspace 里找。来源会话已被移走、删除，或者日志读不出来时，这个 fork 在图上是一个独立的会话，继承来的回合各自占用 PA 编号。通过 dsh-git 创建的 Fork 和 Merge 不受影响：它们自己写入来源。
+- 不支持把 Harness 0.1.2 时期由 dsh-git 创建的会话带到新版本。按 Harness 迁移代码的写法，格式 v0 的日志里出现它不认识的事件类型时拒绝迁移，即使该事件标了 `ignorable`，而这些会话的日志里有 `dsh-git/merge`；这一点没有实际跑过。旧账本本身读得出来，但它记录的事件位置在迁移后的日志里已经对不上。
 - 账本不支持跨标签页同步。同一个 Workspace 开两个标签页时，后写入的那个会被宿主端拒绝，页面顶部提示重新加载；重新加载后恢复正常。
 - 普通回合的 PA Context Window 显示「实际请求 Context 未知」。账本只记录 Fork 或 Merge 时明确选中的 Context，不从可见的父链反推普通回合实际带了什么。
-- 记录了来源的官方 fork，识别依靠子、父会话同回合号的 Prompt 和 Answer 文本一致。子会话比父会话先被读到时，要等父会话也进入账本才会折叠。
+- 宿主端找官方 fork 的来源靠逐事件比对，是精确的；但浏览器把账本里已经存在的复制件折叠进来源时，继承了几轮是按子、来源两边同回合号的 Prompt 和 Answer 文本一致来数的。fork 之后的第一轮如果和来源的同号回合一字不差，会被多折叠一轮。
 - 新会话由宿主端创建，图账本由浏览器随后登记，两步之间没有事务。浏览器登记丢失时，项目图仍能从日志里的 `dsh-git/merge` 事件还原父关系。早于该事件引入的旧 merge 会话只能依赖账本。
 - 只有选中的已完成回合会写入新会话的种子；未选中的祖先回合不会被隐式继承。核心轨迹事件会被复制，来源插件特有、仅用于日志的事件会被排除。种子以一条系统提示词开头，取最后一个选中回合当时生效的那条；其余来源的系统提示词和工具变更通知不会重放。
 - 草稿里含有 `@` 引用等结构化内容时不能 Fork、Merge 或发送锚定问题。

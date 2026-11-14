@@ -105,12 +105,14 @@ interface TurnNode {
 
 ## 5. 导入会话与识别官方 fork
 
-Branches 视图把当前 Session 已完成的回合交给 `syncSession(sessionId, turns, parents)`。`parents` 是 Harness 会话列表给出的「子 Session → 父 Session」映射。导入和 fork 识别在**同一次提交**里完成：
+Branches 视图把当前 Session 已完成的回合交给 `syncSession(sessionId, turns, parents)`。`parents` 是「官方 fork → 它的来源 Session」的映射，有两个出处：Harness 会话列表里记录的父 Session（0.2.1-rc.3 之前创建的 fork），以及 Host 随项目图报告的来源。导入和 fork 识别在**同一次提交**里完成。
 
-> Harness 从 0.2.1-rc.3 起不再给官方 fork 记录来源：新建的官方 fork 没有父 Session，不出现在 `parents` 里，下面的第 2 步对它不起作用，它以独立 Session 的身份导入。这个映射里现在只有 dsh-git 自己创建的会话（它们在种子头里写入父 Session）和旧版 Harness 留下的官方 fork。
+**来源是从日志里找回来的。** Harness 从 0.2.1-rc.3 起不再给官方 fork 记录父 Session。但 fork 的种子仍然是来源日志一段前缀的逐事件拷贝——相同的 seq、时间和消息 id——后面跟一条 `session/end-seed` 标记。Host 据此在同一个 Workspace 的 Session 里找来源（`forkOrigin`）：日志开头与这段继承前缀逐事件相同，并且前缀的最后一个事件是它自己写下的那个 Session。后一个条件排除了「兄弟 fork」：它们也持有同一段前缀，但那是继承来的。比较的是事件而不是文字，所以两个 Session 问过同样的话不算共享历史。来源已经不在这个 Workspace 里、或者日志读不出来时，fork 仍作为独立 Session 导入。
+
+**先并入项目图，再导入回合。** 视图打开时先读项目图并把它并入账本（§8），然后才导入当前 Chat 的回合：项目图知道哪些回合是从别的 Session 复制来的，先并入，这些复制件就不会被当成新的 PA 拿到编号。项目图读不到（Host 报错，或者 Chat 不属于任何 Workspace）时照常导入。
 
 1. **导入**（`syncSessionTurns`）：`sessionTurnRefs` 里已有的回合只核对内容；没有的回合新建节点，父为同 Session 的上一轮。普通回合的 `contextKnown` 为 `false`——账本不从可见的父链反推「实际发出去了什么」。
-2. **识别 fork**（`reconcileOfficialForks`）：对每个有父 Session 的非 dsh-git 会话，从第 1 轮起逐轮比较子、父两边同回合号的 Prompt 和 Answer，取最长的相同前缀。
+2. **识别 fork**（`reconcileOfficialForks`）：对 `parents` 里每个非 dsh-git 会话，从第 1 轮起逐轮比较子、父两边同回合号的 Prompt 和 Answer，取最长的相同前缀。
    - 前缀里除最后一轮以外的回合：子 Session 的历史直接指向父 Session 的节点，子这边的复制件被收回。
    - 前缀的最后一轮：成为子 Session 的 fork 副本（`fork-<sessionId>-<turn>`），子 Session 自己的后续回合从这个副本往下接。
 
@@ -120,7 +122,7 @@ Branches 视图把当前 Session 已完成的回合交给 `syncSession(sessionId
 
 收回一个节点时，`replaceNodes` 会改写账本里所有指向它的地方：边、Context、Session 历史索引、pending 配方、锚点、branch head，以及 `contextRefs` 里的 `paId`。
 
-源码：[`src/client/ledger-transitions.ts`](../src/client/ledger-transitions.ts)、[`src/graph-ledger.ts`](../src/graph-ledger.ts)；测试：`graph-integrity.spec.ts`、`repository.spec.ts`
+源码：[`src/fork-origin.ts`](../src/fork-origin.ts)、[`src/client/ledger-transitions.ts`](../src/client/ledger-transitions.ts)、[`src/client/use-project-graph.ts`](../src/client/use-project-graph.ts)、[`src/graph-ledger.ts`](../src/graph-ledger.ts)；测试：`fork-origin.spec.ts`、`fork-lineage-client.spec.tsx`、`graph-integrity.spec.ts`、`repository.spec.ts`
 
 ---
 
@@ -153,11 +155,11 @@ Branches 视图把当前 Session 已完成的回合交给 `syncSession(sessionId
 
 浏览器通过私有 RPC 只发送每个选中项的 Host 坐标和 `viaSessionId`。Host（`buildMergedSessionSeed`）：
 
-1. **先校验身份**：把每个坐标沿日志里的精确来源关系解析到它的原始回合——dsh-git 创建的 Session 沿 `dsh-git/merge` 事件（Harness 把旧日志迁移到格式 v4 后，这个事件的类型是 `plugin:dsh-git/merge`，两种都读），记录了来源的官方 fork 沿 `parentSession` 和继承边界。没有记录来源的官方 fork（Harness 0.2.1-rc.3 起）无法继续解析，它的继承回合被当作各自独立的身份。同一个 PA 被选了两次，或者 `viaSessionId` 的历史里并不恰好包含这个 PA 一次，整笔拒绝。
+1. **先校验身份**：把每个坐标沿日志里的精确来源关系解析到它的原始回合——dsh-git 创建的 Session 沿 `dsh-git/merge` 事件（Harness 把旧日志迁移到格式 v4 后，这个事件的类型是 `plugin:dsh-git/merge`，两种都读），官方 fork 沿它的来源和继承边界：来源取日志头里记录的 `parentSession`，没有记录时按 §5 从日志里找回。来源找不回来的官方 fork 无法继续解析，它的继承回合被当作各自独立的身份。同一个 PA 被选了两次，或者 `viaSessionId` 的历史里并不恰好包含这个 PA 一次，整笔拒绝。
 2. 读取来源 Session 的规范日志，按 Tray 顺序把选中的已完成回合重新编号成连续的 Turn 1..N。复制的是回合本身的事件：回合与步骤边界、用户消息、`assistant/message`、没有产生消息的 `assistant/attempt`、工具调用与结果、请求头。来源 Session 的 `system/message` 和 `developer/message` 不随回合复制——它们描述的是来源自己的系统提示词和工具表。
 3. 种子的第一个 surface 节点是一条 `system/message`：取 Tray 末位来源在被选回合结束时生效的那条系统提示词（新 Session 继承的正是这个来源的 preset），来源日志里没有系统提示词时写一条空的。Harness 读回已存日志时要求：surface 非空之后出现的任何 `system/message`，前面必须有一条位于 surface 首位的 `system/message`；而新 Session 第一次请求时 Harness 会在历史之后写入自己的系统提示词。没有这个首节点，新 Session 跑过一轮之后日志就读不回来了。首节点与新 Session 渲染出的提示词相同时，Harness 什么都不用再写。
 4. 在种子末尾写入一条 `dsh-git/merge` 事件，记录每个导入回合的来源坐标、`viaSessionId` 和它在新 Session 里的回合号。
-5. 用这份种子创建新 agent，并把新 Session 加入来源 Session 所在的 Workspace。
+5. 用这份种子创建新 agent，并把新 Session 加入来源 Session 所在的 Workspace。响应里带回每个种子回合在新 Session 日志里的结束位置（`turnBoundaries`）。
 
 身份校验只认日志里的来源关系，不比较文本。
 
@@ -172,9 +174,9 @@ Host 成功后，`prepareMergedSession` 登记新 Session：
 
 新 Session 的第一个新回合完成时，`syncSession` 用 pending 里的父关系和 Context 建立节点，并清掉 pending。在那之前图上不出现空的 merge 节点。
 
-fork 副本登记时新 Session 还不存在，暂时带着来源的 `boundarySeq`。新 Session 的日志第一次被读到时，副本改用它在新 Session 里自己的边界——之后再选中这个副本，发给 Host 的坐标才是存在的。
+fork 副本属于新 Session，要从新 Session 的日志里读。合成种子会重新编号事件，还在开头多写一条系统提示词，所以副本的 `boundarySeq` 取自 Host 响应里的 `turnBoundaries`，而不是来源的：来源的那个 seq 在新 Session 的日志里不是这一轮的结尾，拿它去读会被 Host 拒绝。新 Session 的日志被读到时再核对一次。
 
-源码：[`src/client/GraphView.tsx`](../src/client/GraphView.tsx)、[`src/client/graph.ts`](../src/client/graph.ts)、[`src/client/index.ts`](../src/client/index.ts)、[`src/history.ts`](../src/history.ts)、[`src/merge-lineage.ts`](../src/merge-lineage.ts)；测试：`graph.spec.ts`、`history.spec.ts`、`merge-rpc.spec.ts`、`components.spec.tsx`
+源码：[`src/client/merged-chat.ts`](../src/client/merged-chat.ts)、[`src/client/use-context-selection.ts`](../src/client/use-context-selection.ts)、[`src/client/graph.ts`](../src/client/graph.ts)、[`src/client/session-handoff.ts`](../src/client/session-handoff.ts)、[`src/history.ts`](../src/history.ts)、[`src/merge-lineage.ts`](../src/merge-lineage.ts)；测试：`graph.spec.ts`、`history.spec.ts`、`merge-rpc.spec.ts`、`merge-client.spec.ts`、`components.spec.tsx`
 
 ---
 
@@ -187,9 +189,11 @@ fork 副本登记时新 Session 还不存在，暂时带着来源的 `boundarySe
 3. 锚定期间，从来源 Chat 的输入框发送的每个问题都不进入来源 Session，而是在 Anchor Workspace 里各开一个独立的子 Session（id 以 `dsh-git-anchor-` 开头），以冻结的 PA 为历史。
 4. 再点一次按钮取消锚定。Anchor Workspace 保留，下次选中同一组来源时继续使用。
 
+子 Session 不上屏，所以问题发出之后，来源输入框里的文字要等 Host 收下才清空。Host 拒收时，问题留在原输入框里，已经交给子 Session 的附件交还给来源 Session，输入框提示没有发出去。一个 Chat 同一时间只派发一个问题：前一个还没被收下时再按发送不会再开一个子 Session。
+
 Anchor Workspace 有自己的账本作用域。它的项目图里，被冻结的来源 PA 保留原来的编号，各个子 Session 自己的回合标为 `S<n>.<m>`（第 n 个子 Session 的第 m 轮）。
 
-源码：[`src/index.ts`](../src/index.ts)、[`src/client/index.ts`](../src/client/index.ts)、[`src/client/project-graph.ts`](../src/client/project-graph.ts)；测试：`anchor-client.spec.ts`、`merge-rpc.spec.ts`
+源码：[`src/index.ts`](../src/index.ts)、[`src/client/anchor-mode.ts`](../src/client/anchor-mode.ts)、[`src/client/session-handoff.ts`](../src/client/session-handoff.ts)、[`src/client/project-graph.ts`](../src/client/project-graph.ts)；测试：`anchor-client.spec.ts`、`merge-rpc.spec.ts`
 
 ---
 
@@ -197,11 +201,11 @@ Anchor Workspace 有自己的账本作用域。它的项目图里，被冻结的
 
 项目图展示一个 Workspace 里所有已完成的 PA，只读。
 
-Host 读取该 Workspace 登记的全部 Session 的完整日志，返回每个 Session 的已完成回合：起止时间、边界 seq、是否继承自种子、内容指纹，以及 `dsh-git/merge` 来源记录。`assembleProjectGraph` 把它和本地账本拼成一张图：
+Host 读取该 Workspace 登记的全部 Session 的完整日志，返回每个 Session 的已完成回合：起止时间、边界 seq、是否继承自种子、内容指纹、`dsh-git/merge` 来源记录，以及官方 fork 的来源 Session（§5）。某个 Session 的日志读不出来时，它被跳过并记入 Host 日志，其余 Session 照常返回。`assembleProjectGraph` 把它和本地账本拼成一张图：
 
 - 账本里已有的节点沿用原 id；
 - dsh-git 创建的 Session 按 `dsh-git/merge` 的精确坐标还原父关系和 Context；
-- 记录了来源的官方 fork，继承前缀并入父 Session 的节点，末位显示为 fork 副本。账本里已经有这个副本时沿用它的 id；
+- 找得到来源的官方 fork，继承前缀并入来源 Session 的节点，末位显示为 fork 副本。账本里已经有这个副本时沿用它的 id；
 - 来源说不清的继承回合保持独立，不猜边。
 
 拼好的图会并入账本（`adoptObservedGraph`），这样还没打开过的 Session 的回合也能被选中。并入时如果账本已经在另一个 id 下持有同一个回合，以账本自己的记录为准，观察到的那条折叠进去。
@@ -242,7 +246,7 @@ fork 副本         → 紧挨来源右侧；该格被占时，只把本行这�
 | merge 轨道 | 2.5px 彩色线。每个 merge 节点一种颜色（三色循环），来源各自走到目标左侧的竖干再汇入；来源底部有出发圆点，目标左侧有到达圆点 |
 | 图例 | 画布顶部列出每个 merge 的颜色、血缘线和 merge 总数 |
 | 徽标 | `FORK`、`MERGE·n`（n = 去重后的父数）、`HEAD` |
-| 选择状态 | 已加入（蓝）、候选预览（绿色虚线）、未加入 |
+| 选择状态 | 已加入（蓝）、未加入。画布还能画「候选预览」（绿色虚线），Branches 视图目前不产生这个状态 |
 
 与早期视觉稿的差别：线从 1px 加粗到 2.5px 并改为圆角；merge 不再统一淡紫，而是按 merge 实例配色并带图例；fork 连接线两端是圆点而不是箭头。
 
@@ -250,7 +254,7 @@ fork 副本         → 紧挨来源右侧；该格被占时，只把本行这�
 
 `HEAD` 是当前 Session 历史里的最后一个节点，由视图计算。
 
-源码：[`src/client/GraphCanvas.tsx`](../src/client/GraphCanvas.tsx)、[`src/client/styles.ts`](../src/client/styles.ts)；测试：`graph-canvas-design.spec.tsx`、`graph-canvas-selection.spec.tsx`、`graph-canvas-zoom.spec.tsx`
+源码：[`src/client/tree-layout.ts`](../src/client/tree-layout.ts)（行列与连线）、[`src/client/pan-zoom.ts`](../src/client/pan-zoom.ts)（平移缩放）、[`src/client/GraphCanvas.tsx`](../src/client/GraphCanvas.tsx)（渲染）、[`src/client/styles.ts`](../src/client/styles.ts)；测试：`tree-layout.spec.ts`、`graph-canvas-design.spec.tsx`、`graph-canvas-selection.spec.tsx`、`graph-canvas-zoom.spec.tsx`
 
 ---
 
@@ -268,7 +272,7 @@ Harness 里一个会话只有被引用（retain）时才在浏览器里有输入
 
 锚定期间，发送手势改为向 Anchor Workspace 派发（§7）。
 
-拦截发生在输入框卡片的 DOM 边缘，因为 Harness 没有提供「否决提交」的接口。
+拦截发生在输入框卡片的 DOM 边缘，因为 Harness 没有提供「否决提交」的接口。Harness 0.2 起输入框是富文本编辑器而不是 `<textarea>`，回车事件来自可编辑元素或它内部的节点，两种形态都拦。
 
 源码：[`src/client/composer-send-guard.ts`](../src/client/composer-send-guard.ts)、[`src/client/ComposerDiscardAction.tsx`](../src/client/ComposerDiscardAction.tsx)、[`src/client/ContextTray.tsx`](../src/client/ContextTray.tsx)；测试：`composer-send-guard.spec.ts`、`composer-discard-action.spec.tsx`、`context-tray-dock.spec.tsx`
 

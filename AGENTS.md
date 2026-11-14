@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-`src/index.ts` is the Host-side Cordis plugin: it owns storage, Session composition, and trusted RPC handlers. Browser React code lives in `src/client/`. Shared graph, protocol, history, and validation modules live under `src/`; `src/graph-ledger.ts` holds the ledger rules both halves run (identity, numbering, semantic validation, repair). In the browser, `src/client/repository.ts` owns persistence only, and every ledger change is a pure function in `src/client/ledger-transitions.ts`. Tests are in `tests/`, with builders in `tests/fixtures.ts`. `lib/` is generated package output; never edit it by hand. `cordis.patch.yml` registers the plugin layer. The two README files document user behavior and must stay in sync with each other; `docs/conversation-graph-logic.md` describes the graph logic as implemented and is updated with the code.
+`src/index.ts` is the Host-side Cordis plugin: it owns storage, Session composition, and trusted RPC handlers. Browser React code lives in `src/client/`. Shared graph, protocol, history, and validation modules live under `src/`; `src/graph-ledger.ts` holds the ledger rules both halves run (identity, numbering, semantic validation, repair). In the browser, `src/client/repository.ts` owns persistence only, and every ledger change is a pure function in `src/client/ledger-transitions.ts`. `src/client/index.ts` is wiring: the workflows it hands to the slots live in their own modules (`merged-chat.ts`, `anchor-mode.ts`, `session-handoff.ts`, `host-rpc.ts`), `GraphView.tsx` composes its state from the `use-*.ts` hooks, and pure view logic (`tree-layout.ts`, `preview-text.ts`) is kept out of the components so it can be tested without a DOM. Tests are in `tests/`, with builders in `tests/fixtures.ts`. `lib/` is generated package output; never edit it by hand. `cordis.patch.yml` registers the plugin layer. The two README files document user behavior and must stay in sync with each other; `docs/conversation-graph-logic.md` describes the graph logic as implemented and is updated with the code.
 
 ## Build, Test, and Development Commands
 
@@ -22,7 +22,7 @@ Follow the existing TypeScript style: two-space indentation, single quotes, no s
 
 ## Testing Guidelines
 
-Vitest is the test runner; React behavior uses Testing Library and jsdom. Name tests `*.spec.ts` or `*.spec.tsx` and place them in `tests/`. Add focused regression coverage for graph lineage, storage/RPC validation, composer behavior, and DOM bridge cleanup. There is no configured coverage threshold; behavioral assertions are expected for every change.
+Vitest is the test runner; React behavior uses Testing Library and jsdom. Name tests `*.spec.ts` or `*.spec.tsx` and place them in `tests/`. Add focused regression coverage for graph lineage, storage/RPC validation, composer behavior, and DOM bridge cleanup. There is no configured coverage threshold; behavioral assertions are expected for every change. The two DOM-edge adapters (`composer-send-guard.ts`, `project-bridge.tsx`) are tested against hand-written copies of Harness markup, which go stale silently: after a Harness upgrade, exercise them in a running Harness as well (send with unmerged Context, send while anchored, the project graph button).
 
 ## Commit & Pull Request Guidelines
 

@@ -26,10 +26,10 @@ Each completed Prompt + Answer turn is a commit. You can cherry-pick turns from 
 ## Key features
 
 - **Conversation Graph:** The left side of each Session's **Branches** tab is a compact conversation graph. Clicking a node only inspects it: the PA Context Window opens with its Prompt, Answer, and the Context used for that answer. The selection and the current Session do not change.
-- **Chat History preview:** The right side shows the complete chat history the current selection would produce, in tray order, including tool calls and the turn that is still streaming. You see what the new Chat's history will be before you Fork or Merge.
+- **Chat History preview:** The right side shows the complete chat history the current selection would produce, in tray order, including tool calls and the turn that is still streaming. You see what the new Chat's history will be before you Fork or Merge. Each PA is read from the Host once; when one cannot be read, only that PA shows an error and the rest still appear.
 - **Ordered Context Tray:** The tray docks above the official composer. Only PAs you explicitly add enter the new history, and dragging the chips sets the order sent to the model. One PA takes one slot; choosing another fork copy of it replaces that slot in place.
 - **Fork and Merge:** A selection from one Session is a Fork; a selection that spans Sessions is a Merge. The button label, the parent relations in the graph, and the lines drawn all come from the same decision. A Merge has one incoming line per source Session; the other selected PAs are Context and draw no line.
-- **Official fork deduplication:** A fork created through the official Harness feature shares the history prefix it inherited, provided its log records which Session it came from. The copied tip appears as a copy with a `FORK` badge that keeps the original PA number, and later PAs continue beneath it. Harness stopped recording that source in 0.2.1-rc.3; see "Known limitations".
+- **Official fork deduplication:** A fork created through the official Harness feature shares the history prefix it inherited with the Session it came from. The copied tip appears as a copy with a `FORK` badge that keeps the original PA number, and later PAs continue beneath it. Harness stopped recording a fork's source in 0.2.1-rc.3, so the plugin finds it again by comparing the logs event by event; the source has to be in the same Workspace, see "Known limitations".
 - **Anchor mode:** **Anchor** freezes the current selection. From then on, every question sent from this Chat opens its own independent child Session in a dedicated Anchor Workspace, seeded with the frozen PAs. Use it to ask several parallel questions against one context.
 - **Workspace project graph:** Hover over a Workspace row and click its graph button to view every completed PA in that Workspace. The project graph takes over the main column, is read-only, and does not change the current Session. The **PA timeline** at the bottom is ordered by completion time; drag it left to watch the graph grow.
 - **Host-side persistence:** Each Workspace folder has an independent graph ledger that follows the DSH profile and does not depend on the current browser. Sessions outside every folder each use an isolated ledger.
@@ -95,7 +95,7 @@ While the selection has been changed and not yet forked or merged, the composer 
 
 1. Select the PAs, then click **Anchor** in the Conversation Graph header.
 2. The plugin creates a `dsh-git-anchors-…` subdirectory inside the current Workspace directory and registers it as the Anchor Workspace.
-3. Every question sent from this Chat afterwards opens its own child Session in the Anchor Workspace. The original Session is unchanged.
+3. Every question sent from this Chat afterwards opens its own child Session in the Anchor Workspace. The original Session is unchanged. A question leaves the composer only once the Host has taken it; a refused question stays where it was typed, with its attachments, and the composer says so.
 4. Click the button again to cancel. The Anchor Workspace is kept, and anchoring the same PAs again resumes it.
 
 In the Anchor Workspace's project graph, the frozen PAs keep their original numbers and each child Session's own turns are labelled `S<n>.<m>`.
@@ -130,17 +130,19 @@ The event must be marked `ignorable`. If a log contains an event type outside `K
 
 ## Host-side history composition
 
-Through a private RPC, the browser sends only the selected source coordinates: `sessionId`, turn, and completed-turn boundary, plus the Session each was selected through. The Host first checks the identity of every coordinate along the exact provenance recorded in the logs. If the same PA is selected twice, or a coordinate does not belong to the Session history it claims, the whole request is refused and nothing is created. Otherwise the Host reads the canonical Session logs, renumbers the selected turns in tray order, creates a new agent from the resulting well-formed seed, and adds the new Session to the Workspace of its source Session.
+Through a private RPC, the browser sends only the selected source coordinates: `sessionId`, turn, and completed-turn boundary, plus the Session each was selected through. The Host first checks the identity of every coordinate along the exact provenance recorded in the logs. If the same PA is selected twice, or a coordinate does not belong to the Session history it claims, the whole request is refused and nothing is created. In that check, a turn an official fork inherited counts as the same PA as in the Session it was forked from. Otherwise the Host reads the canonical Session logs, renumbers the selected turns in tray order, creates a new agent from the resulting well-formed seed, adds the new Session to the Workspace of its source Session, and tells the browser where each turn sits in the new Session's log.
 
 This process changes only the conversation history. Files remain shared across the Workspace and do not branch with the conversation.
 
 ## Project graph data loading
 
-The Host registers a private trusted-host Connection RPC under `/dsh-git`. A project graph request carries only the Workspace id. The Host reads the complete canonical logs of every Session registered to that Workspace and returns normalized completed-PA records: start and completion times, fork-seed boundaries, content fingerprints, and merge provenance. Incomplete turns are never returned.
+The Host registers a private trusted-host Connection RPC under `/dsh-git`. A project graph request carries only the Workspace id. The Host reads the complete canonical logs of every Session registered to that Workspace and returns normalized completed-PA records: start and completion times, fork-seed boundaries, content fingerprints, merge provenance, and the source Session of each official fork. Incomplete turns are never returned; when one Session's log cannot be read, only that Session is left out.
 
-The browser assembles that response and the ledger into one graph and adopts it into the ledger. Sessions created by dsh-git have their parents restored from the exact coordinates in their logs. Inherited turns of an official fork fold into the parent Session's nodes, with the tip shown as a fork copy. Older copied turns with unknown provenance remain separate rather than being connected by a guessed edge.
+An official fork's source is worked out by comparison: a fork's seed is an event-for-event copy of a prefix of the source log, so the Host looks in the same Workspace for the Session whose log begins with exactly that prefix and which wrote the prefix's last event itself. Events are compared, not wording.
 
-DeepSeek Harness does not currently expose project-row action or project-page slots. The project graph button and main-column takeover therefore live in a compatibility bridge built on semantic DOM attributes and a `MutationObserver`. The composer send guard works the same way, at the DOM edge of the composer card. If the Harness sidebar or composer DOM changes, these two adapters may need an update; the PA data protocol and graph page are independent of them.
+The browser assembles that response and the ledger into one graph and adopts it into the ledger, and only then imports the current Chat's own turns, so the turns a fork copied are not numbered as new PAs first. Sessions created by dsh-git have their parents restored from the exact coordinates in their logs. Inherited turns of an official fork fold into the source Session's nodes, with the tip shown as a fork copy. Copied turns with unknown provenance remain separate rather than being connected by a guessed edge.
+
+DeepSeek Harness does not currently expose project-row action or project-page slots. The project graph button and main-column takeover therefore live in a compatibility bridge built on semantic DOM attributes and a `MutationObserver`. The composer send guard works the same way, at the DOM edge of the composer card; it recognises the rich-text composer of Harness 0.2 as well as the earlier `<textarea>`. If the Harness sidebar or composer DOM changes, these two adapters may need an update; the PA data protocol and graph page are independent of them.
 
 ## Development and testing
 
@@ -155,23 +157,39 @@ pnpm pack
 
 Source layout:
 
+Host and shared:
+
 - `src/index.ts`: the Host plugin. It registers the RPCs, composes Session seeds, and reads and writes the ledger.
 - `src/graph-ledger.ts`: ledger logic shared by both halves—identity, number finalization, semantic validation, node replacement, and repair.
 - `src/history.ts`, `src/merge-lineage.ts`, `src/project-history.ts`, `src/history-preview.ts`: Host-side history composition, the provenance event, and log projections.
+- `src/fork-origin.ts`: finding an official fork's source Session from the logs.
 - `src/protocol.ts`: RPC endpoints and strict decoders.
+
+Browser data and workflows:
+
+- `src/client/index.ts`: the plugin entry, wiring only—it registers a component with each slot and hands it the ledger and the Host.
 - `src/client/repository.ts`: the browser ledger's read, write queue, and subscription.
 - `src/client/ledger-transitions.ts`: pure ledger transitions—importing a Session, recognising official forks, registering a new Chat, and adopting the project graph.
+- `src/client/host-rpc.ts`, `workspace-graph.ts`: one typed call per Host endpoint, and the project graph read.
+- `src/client/merged-chat.ts`: creating a new Chat (Fork or Merge) and moving the draft into it.
+- `src/client/anchor-mode.ts`: anchoring, cancelling, and dispatching an anchored question.
+- `src/client/session-handoff.ts`, `draft-attachments.ts`: holding a just-created Session, moving a draft's attachments and staging their uploads for it, and waiting for the Host to take a send.
 - `src/client/project-graph.ts`: project graph assembly.
-- `src/client/draft-attachments.ts`: re-staging a draft's uploads for the Session it moves to.
-- `src/client/GraphView.tsx`, `GraphCanvas.tsx`, `ContextTray.tsx`, `ChatHistoryPreview.tsx`, and the rest: the interface.
+
+Interface:
+
+- `src/client/GraphView.tsx`: the Branches view, composed from four hooks—`use-project-graph.ts` (the project graph), `use-context-selection.ts` (the Context selection), `use-history-preview.ts` (reading and caching Chat History), and `use-busy-action.ts` (abortable actions).
+- `src/client/GraphCanvas.tsx`, `tree-layout.ts`, `pan-zoom.ts`: rendering the conversation graph, its row-and-lane layout and connectors, and pan and zoom.
+- `src/client/ChatHistoryPreview.tsx`, `PreviewRecords.tsx`, `preview-text.ts`, `stick-to-bottom.ts`: the Chat History panel, the row component for each kind of record, summary text, and stick-to-bottom scrolling.
+- `src/client/ContextTray.tsx`, `ComposerDiscardAction.tsx`, `composer-send-guard.ts`, `HistoryRail.tsx`, `ProjectGraphPage.tsx`, and the rest: the tray, the composer action and send guard, the history rail, and the project graph page.
 
 Tests by layer:
 
 - **Ledger:** `graph-integrity.spec.ts` (fork numbering, one occurrence per Session, legacy-ledger repair, needless writes), `graph-correctness.spec.ts` (finalization order, Context references, the revision check), `repository.spec.ts`, `workspace-repositories.spec.ts`, `graph-domain.spec.ts`, `graph-medium.spec.ts` (a round trip through the real JSON storage backend), `graph.spec.ts`, `labels.spec.ts`.
-- **Host:** `history.spec.ts` (seed composition, identity checks, the `ignorable` provenance event), `merge-rpc.spec.ts` (the Fork, Merge, and anchor RPC flows end to end), `project-history.spec.ts`, `history-preview.spec.ts`, `seed-head.spec.ts` (the system prompt a seed must open with to stay readable).
+- **Host:** `history.spec.ts` (seed composition, identity checks, the `ignorable` provenance event), `merge-rpc.spec.ts` (the Fork, Merge, and anchor RPC flows end to end), `fork-origin.spec.ts` (finding an official fork's source, a PA selected through a fork, an unreadable Session), `project-history.spec.ts`, `history-preview.spec.ts`, `seed-head.spec.ts` (the system prompt a seed must open with to stay readable).
 - **Project graph:** `project-graph.spec.ts`, `project-page.spec.tsx`, `project-bridge.spec.tsx`.
-- **Interface:** `components.spec.tsx`, `graph-canvas-design.spec.tsx`, `graph-canvas-selection.spec.tsx`, `graph-canvas-zoom.spec.tsx`, `history-rail.spec.tsx`, `chat-history-preview.spec.tsx`, `preview-markdown.spec.tsx`, `preview-cache.spec.ts`, `live-turn.spec.ts`, `extract.spec.ts`.
-- **Composer and tray:** `composer-send-guard.spec.ts`, `composer-discard-action.spec.tsx`, `composer-block-lease.spec.ts`, `context-tray-channel.spec.ts`, `context-tray-dock.spec.tsx`, `context-tray-slot.spec.ts`, `anchor-client.spec.ts`, `merge-client.spec.ts` (creating a Chat on retained Session references and moving its draft), `draft-attachments.spec.ts`.
+- **Interface:** `components.spec.tsx` (selection, Fork/Merge, anchoring, reading Chat History), `fork-lineage-client.spec.tsx` (the project graph is adopted before turns are imported), `tree-layout.spec.ts`, `preview-text.spec.ts`, `graph-canvas-design.spec.tsx`, `graph-canvas-selection.spec.tsx`, `graph-canvas-zoom.spec.tsx`, `history-rail.spec.tsx`, `chat-history-preview.spec.tsx`, `preview-markdown.spec.tsx`, `preview-cache.spec.ts`, `live-turn.spec.ts`, `extract.spec.ts`.
+- **Composer and tray:** `composer-send-guard.spec.ts`, `composer-discard-action.spec.tsx`, `composer-block-lease.spec.ts`, `context-tray-channel.spec.ts`, `context-tray-dock.spec.tsx`, `context-tray-slot.spec.ts`, `anchor-client.spec.ts` (anchoring and dispatch, including a refused question), `merge-client.spec.ts` (creating a Chat on retained Session references and moving its draft), `draft-attachments.spec.ts`, `host-rpc.spec.ts`.
 
 To run a smoke test without touching your real DSH profile, point `DSH_HOME` at a temporary directory:
 
@@ -188,11 +206,11 @@ The configuration output must end with a `# == dsh-git` layer. The page that ope
 
 - `dsh-git` does not automatically decide whether a piece of history is correct, trustworthy, or useful. It provides context visualization, provenance, selection, and composition; the final judgment remains with the user.
 - Only Harness 0.2.2-rc.3 is supported; see "Version requirements".
-- Since Harness 0.2.1-rc.3 an official fork no longer records the Session it was forked from, and nothing in its log names the source. Such a fork appears in the graph as an independent Session whose inherited turns carry their own PA numbers, and the Host cannot tell that one of them and its original are the same PA. Official forks made by older Harness versions keep their recorded source and are still folded. Forks and Merges created through dsh-git are unaffected: they write their own provenance.
-- Upgrading a profile that already holds dsh-git data from Harness 0.1.2 has not been tested. Harness migrates old Session logs to format v4 and renumbers their events on the way, while the ledger and the `dsh-git/merge` event store event positions.
+- An official fork's source is looked for only in the same Workspace. When the source Session has been moved or deleted, or its log cannot be read, the fork appears in the graph as an independent Session whose inherited turns carry their own PA numbers. Forks and Merges created through dsh-git are unaffected: they write their own provenance.
+- Sessions that dsh-git created under Harness 0.1.2 are not carried over to the new version. As the Harness migration code reads, a format-v0 log holding an event type it does not know is refused, even when the event is marked `ignorable`, and those Sessions' logs hold `dsh-git/merge`; this has not been run. An old ledger itself can still be read, but the event positions it records no longer match the migrated logs.
 - The ledger does not synchronize across tabs. With two tabs open on one Workspace, the later writer is refused by the Host and the page shows a notice asking for a reload; reloading restores it.
 - The PA Context Window of an ordinary turn reads "Actual request Context is unknown". The ledger records only the Context explicitly selected for a Fork or Merge, and does not infer what an ordinary turn carried from its visible parent chain.
-- An official fork that records its source is recognised by matching Prompt and Answer text at the same turn numbers in the child and parent Sessions. When the child is read before its parent, it is folded only once the parent is in the ledger too.
+- The Host finds an official fork's source by comparing events, which is exact. But when the browser folds copies that are already in the ledger into the source, it counts the inherited turns by matching Prompt and Answer text at the same turn numbers in the fork and the source. A fork whose first own turn is word for word the source's turn of the same number is folded one turn too far.
 - The Host creates the new Session and the browser registers it in the ledger afterwards; there is no transaction across the two. If the browser's registration is lost, the project graph still restores the parents from the `dsh-git/merge` event in the log. Merge Sessions older than that event depend on the ledger alone.
 - Only selected completed turns are written into the new Session's seed; unselected ancestor turns are not inherited implicitly. Core trajectory events are copied, while source-plugin-specific log-only events are excluded. The seed opens with one system prompt, the one in effect for the last selected turn; the other sources' system prompts and tool-change notices are not replayed.
 - A draft containing `@` references or other structured content cannot be forked, merged, or sent as an anchored question.
