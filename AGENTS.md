@@ -2,17 +2,17 @@
 
 ## Project Structure & Module Organization
 
-`src/index.ts` is the Host-side Cordis plugin: it owns storage, Session composition, and trusted RPC handlers. Browser React code lives in `src/client/`. Shared graph, protocol, history, and validation modules live under `src/`. Tests are in `tests/`, with builders in `tests/fixtures.ts`. `lib/` is generated package output; never edit it by hand. `cordis.patch.yml` registers the plugin layer, while the two README files document user behavior.
+`src/index.ts` is the Host-side Cordis plugin: it owns storage, Session composition, and trusted RPC handlers. Browser React code lives in `src/client/`. Shared graph, protocol, history, and validation modules live under `src/`; `src/graph-ledger.ts` holds the ledger rules both halves run (identity, numbering, semantic validation, repair). In the browser, `src/client/repository.ts` owns persistence only, and every ledger change is a pure function in `src/client/ledger-transitions.ts`. Tests are in `tests/`, with builders in `tests/fixtures.ts`. `lib/` is generated package output; never edit it by hand. `cordis.patch.yml` registers the plugin layer. The two README files document user behavior and must stay in sync with each other; `docs/conversation-graph-logic.md` describes the graph logic as implemented and is updated with the code.
 
 ## Build, Test, and Development Commands
 
-- `pnpm install` installs dependencies; development links expect a sibling `../deepseek-harness` checkout.
+- `pnpm install` installs dependencies; development links expect a sibling `../deepseek-harness` checkout at tag `dsh-v0.1.2-rc.1`, installed and built with `corepack pnpm run build:lib` (and `build:web` to open the UI). Harness `master` no longer has the packages this plugin links to.
 - `pnpm typecheck` runs strict TypeScript checks without emitting files.
 - `pnpm test` runs the Vitest suite once; `pnpm test:watch` supports local iteration.
 - `pnpm build` emits declarations and bundles Host and browser entries into `lib/`.
 - `pnpm pack` creates the distributable archive for installation testing.
-- `pnpm --dir ../deepseek-harness dsh plugin --profile web add "$PWD"` installs this checkout for UI testing.
-- `pnpm --dir ../deepseek-harness dsh --profile web --port 0` starts Harness on an available port.
+- `corepack pnpm --dir ../deepseek-harness dsh plugin --profile web add "$PWD"` installs this checkout for UI testing.
+- `corepack pnpm --dir ../deepseek-harness dsh --profile web --port 0` starts Harness on an available port. Set `DSH_HOME` to a temporary directory first so the real profile is not touched.
 
 Before submitting, run `pnpm typecheck && pnpm test && pnpm build` and `git diff --check`.
 

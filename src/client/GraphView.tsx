@@ -567,7 +567,7 @@ export function GraphView({
                 aria-pressed={anchorActive}
                 disabled={anchorBusy || busy || (!anchorActive && (selectedIds.length === 0 || candidateId !== null))}
                 title={anchorActive
-                  ? localized(`取消锚点；若「${anchor.workspaceTitle}」仍为空则清理它`, `Cancel anchor; remove “${anchor.workspaceTitle}” if it is still empty`, locale)
+                  ? localized(`取消锚点；「${anchor.workspaceTitle}」会保留，再次锚定同一组 PA 时继续使用`, `Cancel anchor; “${anchor.workspaceTitle}” is kept and reused when the same PAs are anchored again`, locale)
                   : localized('固定蓝色 PA，并创建隔离的并列问题 Workspace', 'Fix the blue PAs and create an isolated Workspace for parallel questions', locale)}
                 onClick={() => { void toggleAnchor() }}
               >

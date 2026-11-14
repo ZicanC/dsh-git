@@ -6,7 +6,7 @@
 
 In long-running conversations, incorrect conclusions, outdated assumptions, failed approaches, and irrelevant tool output can continue propagating into later turns. This project lets people explicitly select the trustworthy, relevant turns that should form the next conversation history instead of inheriting an entire polluted thread by default.
 
-Each completed Prompt + Answer turn is a commit. You can cherry-pick turns from any branch, arrange them in any order to form a new conversation history, and continue asking questions from there. The assembled turns are written as real, completed DSH history—not appended to the prompt as a context block. To the agent, the resulting history is indistinguishable from one it experienced firsthand.
+Each completed Prompt + Answer turn is a commit. You can cherry-pick turns from any Session, arrange them in any order to form a new conversation history, and continue asking questions from there. The assembled turns are written as real, completed DSH history—not appended to the prompt as a context block. To the agent, the resulting history is indistinguishable from one it experienced firsthand.
 
 `dsh-git` is a plugin for DeepSeek Harness Web.
 
@@ -14,116 +14,134 @@ Each completed Prompt + Answer turn is a commit. You can cherry-pick turns from 
 
 | Git | dsh-git |
 | --- | --- |
-| `commit` | Each completed Prompt + Answer turn is a `PA` node: atomic, addressable, and never rewritten in place. |
-| `log --graph` | Each Session has a **Conversation Graph**, and each Workspace has a project graph. Both show forks, merge edges, and `HEAD`. |
-| `HEAD` | The active node. Its state is independent of node preview and context selection. |
-| `checkout` | Use **Switch to this branch** to open the DSH Session associated with a node. |
-| `cherry-pick` | Select PA nodes from any branch and add them to the ordered **Context Tray**. |
+| `commit` | Each completed Prompt + Answer turn is a `PA` node: atomic, addressable, and never rewritten once written. |
+| `log --graph` | Each Session's **Branches** tab has a **Conversation Graph**, and each Workspace has a project graph. Both show branches, fork copies, merge tracks, and `HEAD`. |
+| `HEAD` | The last node in the current Session's history. It is independent of node inspection and context selection. |
+| `checkout` | In the project graph, **Open source Session** jumps to the Session that holds a PA. |
+| `cherry-pick` | Open a PA from any Session and use **Add to Context** to put it in the ordered **Context Tray**. |
 | `rebase` | The Host renumbers the selected turns into one continuous history, following their order in the tray. |
-| `branch` | Asking from the tray creates a new Host-side Session seeded with that history. |
-| `merge` | The next Prompt and Answer become a multi-parent DAG node that records every source. |
+| `branch` | When the selection comes from one Session, the tray button reads **Fork**: a new Chat is created from that history. |
+| `merge` | When the selection spans Sessions, the button reads **Merge**: the new Chat's first turn becomes a multi-parent node that records every source. |
 
 ## Key features
 
-These features let people inspect the content and provenance of information before explicitly deciding which history may enter the next conversation.
+- **Conversation Graph:** The left side of each Session's **Branches** tab is a compact conversation graph. Clicking a node only inspects it: the PA Context Window opens with its Prompt, Answer, and the Context used for that answer. The selection and the current Session do not change.
+- **Chat History preview:** The right side shows the complete chat history the current selection would produce, in tray order, including tool calls and the turn that is still streaming. You see what the new Chat's history will be before you Fork or Merge.
+- **Ordered Context Tray:** The tray docks above the official composer. Only PAs you explicitly add enter the new history, and dragging the chips sets the order sent to the model. One PA takes one slot; choosing another fork copy of it replaces that slot in place.
+- **Fork and Merge:** A selection from one Session is a Fork; a selection that spans Sessions is a Merge. The button label, the parent relations in the graph, and the lines drawn all come from the same decision. A Merge has one incoming line per source Session; the other selected PAs are Context and draw no line.
+- **Official fork deduplication:** A fork created through the official Harness feature shares the history prefix it inherited. The copied tip appears as a copy with a `FORK` badge that keeps the original PA number, and later PAs continue beneath it.
+- **Anchor mode:** **Anchor** freezes the current selection. From then on, every question sent from this Chat opens its own independent child Session in a dedicated Anchor Workspace, seeded with the frozen PAs. Use it to ask several parallel questions against one context.
+- **Workspace project graph:** Hover over a Workspace row and click its graph button to view every completed PA in that Workspace. The project graph takes over the main column, is read-only, and does not change the current Session. The **PA timeline** at the bottom is ordered by completion time; drag it left to watch the graph grow.
+- **Host-side persistence:** Each Workspace folder has an independent graph ledger that follows the DSH profile and does not depend on the current browser. Sessions outside every folder each use an isolated ledger.
 
-- **Per-Session conversation graph:** Each Session has a compact **Conversation Graph**. A fork created through the official Harness feature shares its inherited history prefix. The copied tip appears as a `PA<n> fork` branch marker, and subsequent PAs continue beneath it. A node's Prompt, Answer, and historical context appear only after you select that PA, so you can inspect its content and source before including it.
-- **Workspace project graph:** Click the graph button beside a Workspace row to view every completed PA in that Workspace. Repeated fork history is collapsed into a `PA<n> fork` branch marker without consuming a new PA number. The project graph takes over the main column without changing the current Session.
-- **PA timeline:** The project graph opens at the complete history. Drag the timeline to step backward through completed PAs; the first new PA produced by each Session is marked on the rail.
-- **Ordered Context Tray:** Only explicitly selected nodes enter the new history. New selections are arranged by creation time by default, and you can drag them into a custom order. That explicit order remains intact when you add more nodes.
-- **Cross-branch selection:** Select PAs freely across branches. If a selected node is missing its direct predecessor, the plugin warns you to check whether the context is complete, but does not make that decision by adding the missing node automatically.
-- **Host-side persistence:** Each Workspace folder has an independent graph ledger containing branch names, canonical node references, context manifests, preview state, and pending merge metadata. Sessions outside every folder each use an isolated ledger. Graph data follows the DSH profile and does not depend on the current browser.
+## Version requirements
+
+This plugin targets **DeepSeek Harness 0.1.2-rc.1** (tag `dsh-v0.1.2-rc.1`). Type checking, tests, and the `lib/` build are all made against that version.
+
+The Harness `master` branch (0.2.2) has removed the `@deepseek-ai/dsh-agent-presets` package this plugin depends on, and its Session events and composer interface have changed, so the plugin does not build there. Porting to a newer Harness is separate work.
+
+Node `^22.19.0 || >=24.0.0` is required. This Harness version pins pnpm 11.7.0; the commands below call it through `corepack`.
 
 ## Install
 
-`dsh-git` provides only the plugin; it does not include the `dsh` executable. If you use a source checkout of DeepSeek Harness, invoke the CLI from that checkout. The commands below assume it is in the sibling directory `../deepseek-harness`:
+`dsh-git` provides only the plugin; it does not include the `dsh` executable. Development dependencies link to a sibling Harness source checkout, so prepare that first:
+
+```bash
+git clone https://github.com/deepseek-ai/deepseek-harness.git ../deepseek-harness
+git -C ../deepseek-harness checkout dsh-v0.1.2-rc.1
+corepack pnpm --dir ../deepseek-harness install
+corepack pnpm --dir ../deepseek-harness run build:lib
+corepack pnpm --dir ../deepseek-harness run build:web
+```
+
+`build:lib` produces the packages the plugin's links point at. `build:web` produces the web frontend; without it the Web UI serves a 404.
+
+Then build and install the plugin:
 
 ```bash
 pnpm install
 pnpm run build
-pnpm --dir ../deepseek-harness dsh plugin --profile web add "$PWD"
-pnpm --dir ../deepseek-harness dsh --profile web
+corepack pnpm --dir ../deepseek-harness dsh plugin --profile web add "$PWD"
+corepack pnpm --dir ../deepseek-harness dsh --profile web
 ```
 
-If `dsh` is installed globally and `command -v dsh` prints its path, you can use the shorter `dsh plugin ...` and `dsh --profile web` commands instead. Do not run `pnpm dsh` inside this plugin repository: pnpm only searches for scripts and executables provided by the current project, and this project provides neither.
+If `dsh` is installed globally and `command -v dsh` prints its path, you can use the shorter `dsh plugin ...` and `dsh --profile web` instead. Do not run `pnpm dsh` inside this plugin repository: pnpm only searches for scripts and executables provided by the current project, and this project provides neither.
 
-After opening the Web UI, enter a graph view in either of these ways:
-
-- Once a Session has at least one completed turn, select the **Branches** tab.
-- Hover over a Workspace row and click its graph button to open the complete project graph.
+The built plugin does not contain the local path: its browser bundle is self-contained except for React, which DSH supplies through its client module table. The built `lib/` files ship with the package, so installing a release archive needs no build step.
 
 To uninstall the plugin:
 
 ```bash
-pnpm --dir ../deepseek-harness dsh plugin --profile web remove dsh-git
+corepack pnpm --dir ../deepseek-harness dsh plugin --profile web remove dsh-git
 ```
-
-Development dependencies currently link to a sibling `../deepseek-harness` source checkout because the public rc.1 dependency graph references an unpublished package. The built plugin does not contain that local path: its browser bundle is self-contained except for React, which DSH supplies through its client module table. The built `lib/` files ship with the package, so installing a release archive does not require a build step.
 
 ## Workflow
 
-When the current Session has accumulated incorrect assumptions, failed approaches, or irrelevant material, you do not need to keep inheriting its complete history. Select the PAs that remain trustworthy and relevant, arrange them as needed, and use them to create a new conversation branch.
+When the current Session has accumulated incorrect assumptions, failed approaches, or irrelevant material, you do not need to keep inheriting its complete history.
 
 1. Complete one or more ordinary turns in DSH.
-2. Open the **Branches** tab. The current primary line is solid, and the active node is marked `HEAD`.
-3. Select any PA nodes. They enter the Context Tray in creation order.
-4. Drag the chips to set the exact order sent to the model.
-5. Enter the next question, then select **Create merge branch and ask**.
-6. The plugin creates a new Session using the selected turns as its ordered history, opens it, and sends the question. When the answer completes, `HEAD` moves to the new node.
+2. Open the **Branches** tab. The current Session's history is selected by default and shown in blue; its last node is marked `HEAD`.
+3. Click any node to inspect it, then use **Add to Context** or **Remove from Context** in the PA Context Window.
+4. Drag the chips in the Context Tray above the composer to set the order sent to the model. The Chat History on the right follows.
+5. Write the next question in the official composer, then click **Fork** or **Merge** on the tray.
+6. The plugin creates a new Chat with the selected turns as its ordered history, moves the draft into it, and opens it. After you send, the new node appears in the graph when the answer completes.
 
-Clicking a node only previews its contents; it does not change the context or current Session. Use checkboxes to select context and **Switch to this branch** to check out a branch.
+While the selection has been changed and not yet forked or merged, the composer still accepts typing, but Enter and the send button are refused so the question cannot go into the old Session. To drop the changes, click **Discard changes and send** beside the composer: the selection returns to the current Session's complete history and the question goes to the original Session.
 
-The project graph is read-only. Click a PA to open its detail inspector, or click **Open source Session** to close the project graph and navigate to the source Session. The bottom slider starts at the rightmost PA. Dragging it left hides every PA and edge that appeared after the selected completion point.
+### Anchor mode
+
+1. Select the PAs, then click **Anchor** in the Conversation Graph header.
+2. The plugin creates a `dsh-git-anchors-…` subdirectory inside the current Workspace directory and registers it as the Anchor Workspace.
+3. Every question sent from this Chat afterwards opens its own child Session in the Anchor Workspace. The original Session is unchanged.
+4. Click the button again to cancel. The Anchor Workspace is kept, and anchoring the same PAs again resumes it.
+
+In the Anchor Workspace's project graph, the frozen PAs keep their original numbers and each child Session's own turns are labelled `S<n>.<m>`.
 
 ## Data model
 
-DSH Session logs are append-only and ordered chronologically. `dsh-git` adds a Host-managed semantic graph on top:
+DSH Session logs are append-only and ordered chronologically. `dsh-git` adds a semantic graph on top. The key ideas:
 
-```ts
-interface TurnNode {
-  id: string
-  sessionId: string
-  turn: number
-  primaryParentId: string | null
-  parentIds: readonly string[]
-  contextManifest: readonly string[]
-  prompt: string
-  answer: string
-  branchId: string
-}
-```
+- **PA identity and occurrence:** One PA can appear in several Sessions (its original occurrence and its fork copies). Identity decides the number; an occurrence decides where it is drawn and which Session owns it.
+- **PA numbers:** Assigned within one ledger scope, and never changed once shown. Fork copies take no number.
+- **Parents:** `parentIds` decides the lines in the graph. An ordinary turn's parent is the previous turn of its Session; a Merge node has one parent per source Session.
+- **Context:** `contextRefs` records which PAs a turn actually carried, in what order, and through which Session's history each was selected. It is used only to highlight nodes when one is inspected, and draws no line.
 
-`primaryParentId` determines the highlighted primary line, `parentIds` determines the graph edges, and `contextManifest` records the exact PA order selected when creating a new Session history.
+The complete fields, decision rules, and invariants are in [`docs/conversation-graph-logic.md`](./docs/conversation-graph-logic.md).
 
 ## How graph data is stored
 
-The Host maintains two kinds of records, separated by whether the data can change after it is written.
+**The graph ledger** lives in a `dsh-storage-domain` domain named `dsh_git_graph`, with one record per scope: Sessions in a Workspace folder use `workspace:<id>`, while Sessions outside every folder use `session:<id>`. The ledger stores nodes, branches, Session turn references, pending merge recipes, and anchor bindings. Selection, inspection, and tray order belong to the view and are not written to the ledger.
 
-**The graph ledger** lives in a `dsh-storage-domain` domain named `dsh_git_graph`, with one record per scope: Sessions in a Workspace folder use `workspace:<id>`, while Sessions outside every folder use `session:<id>`. The ledger stores all mutable state, including nodes, branches and their names, Session turn references, pending merges, `HEAD`, preview state, and Context Tray order.
+The browser holds an in-memory copy of the ledger. On mount it reads the ledger once for the current scope; every later change writes the complete record back to the Host, serialized within each scope. Changes made before the initial read completes are deferred, so an early-rendered view cannot create duplicate nodes for turns the Host already knows. Switching between Sessions that are already recorded produces no write.
 
-The browser holds the authoritative in-memory copy rendered by React. On mount, it reads the ledger once for the current scope; every subsequent state change writes the complete record back to the Host. Writes are serialized within each scope, so the persistent ledger cannot fall behind the state shown on screen. Changes made before the initial read completes are deferred rather than applied immediately, preventing an early-rendered view from creating duplicate nodes for turns the Host already knows.
+The Host guards every write:
 
-**Merge provenance** is also written to the merged Session's own log as a `dsh-git/merge` event at the end of the seed. The event records the Host coordinates of every imported turn: `sessionId`, turn, boundary seq, and the turn number it occupies in the new Session. It does not depend on browser-side node ids, so a merge branch can be reconstructed from its log even if the graph ledger is lost.
+- **Revision check:** Each write carries the revision it was based on. If that differs from the stored revision the write is refused and the stored ledger is left as it was.
+- **Semantic validation:** Cycles, dangling references, the same PA appearing twice in one Session, Merge parents that disagree with the Context, and similar faults cause the whole write to be refused.
 
-The event must be marked `ignorable`. If a log contains an event type outside `KNOWN_SESSION_EVENT_TYPES` and the writer does not set that flag, `session-persistence` refuses to parse the entire log; plugins cannot extend that build-time set. Because `Session.append` does not accept the flag, the plugin constructs the event directly and places it in the seed—the only write path that supports it. This is also why the plugin cannot append graph metadata to an active Session and why mutable state lives in a storage domain instead of additional Session events.
+Ledgers written by earlier versions can hold the same turn under two ids. They are repaired automatically when read; nothing needs to be done by hand.
+
+**Merge provenance** is also written to the new Session's own log as a `dsh-git/merge` event at the end of the seed. It records the Host coordinates of every imported turn—`sessionId`, turn, boundary seq, the Session it was selected through, and the turn number it occupies in the new Session—and does not depend on browser-side node ids. The project graph can therefore restore a merge's parents from the log alone, even if the graph ledger is lost.
+
+The event must be marked `ignorable`. If a log contains an event type outside `KNOWN_SESSION_EVENT_TYPES` and the writer does not set that flag, `session-persistence` refuses to parse the entire log; plugins cannot extend that build-time set. Because `Session.append` does not accept the flag, the plugin constructs the event directly and places it in the seed—the only write path that supports it. This is also why the plugin cannot append graph metadata to an active Session and why the mutable ledger lives in a storage domain.
 
 ## Host-side history composition
 
-Through a private command, the browser sends only the selected source coordinates: `sessionId`, turn, and completed-turn boundary. The Host validates those coordinates, reads the corresponding canonical Session logs, renumbers the selected completed turns in Context Tray order, and creates a new agent from the resulting well-formed seed. Before the next question is sent normally, the new Session is added to the same Workspace as its source Session.
+Through a private RPC, the browser sends only the selected source coordinates: `sessionId`, turn, and completed-turn boundary, plus the Session each was selected through. The Host first checks the identity of every coordinate along the exact provenance recorded in the logs. If the same PA is selected twice, or a coordinate does not belong to the Session history it claims, the whole request is refused and nothing is created. Otherwise the Host reads the canonical Session logs, renumbers the selected turns in tray order, creates a new agent from the resulting well-formed seed, and adds the new Session to the Workspace of its source Session.
 
 This process changes only the conversation history. Files remain shared across the Workspace and do not branch with the conversation.
 
 ## Project graph data loading
 
-The Host registers a private trusted-host Connection RPC under `/dsh-git`. A project graph request carries only the Workspace id. The Host resolves every Session id registered to that Workspace, reads the complete canonical logs through `sessionQuery`, and returns normalized completed-PA records with start and completion times, fork-seed boundaries, and content fingerprints. Incomplete turns are never returned.
+The Host registers a private trusted-host Connection RPC under `/dsh-git`. A project graph request carries only the Workspace id. The Host reads the complete canonical logs of every Session registered to that Workspace and returns normalized completed-PA records: start and completion times, fork-seed boundaries, content fingerprints, and merge provenance. Incomplete turns are never returned.
 
-The browser merges that response into the existing semantic graph. Known dsh-git merge nodes retain their exact multi-parent relationships and context metadata. For an ordinary fork created through the official Harness feature, inherited turns reuse their proven parent lineage. Only the copied tip appears as a sibling `PA<n> fork` alias, and the first genuinely new PA continues beneath it. Older copied turns with unknown provenance remain separate rather than being connected by a guessed edge.
+The browser assembles that response and the ledger into one graph and adopts it into the ledger. Sessions created by dsh-git have their parents restored from the exact coordinates in their logs. Inherited turns of an official fork fold into the parent Session's nodes, with the tip shown as a fork copy. Older copied turns with unknown provenance remain separate rather than being connected by a guessed edge.
 
-DeepSeek Harness does not currently expose project-row action or project-page slots. The project graph button and main-column takeover therefore live in a compatibility bridge built on semantic DOM attributes and a `MutationObserver`. If the Harness sidebar DOM changes, this adapter may need an update; the PA data protocol and graph page are independent of it.
+DeepSeek Harness does not currently expose project-row action or project-page slots. The project graph button and main-column takeover therefore live in a compatibility bridge built on semantic DOM attributes and a `MutationObserver`. The composer send guard works the same way, at the DOM edge of the composer card. If the Harness sidebar or composer DOM changes, these two adapters may need an update; the PA data protocol and graph page are independent of them.
 
 ## Development and testing
 
-You can use VS Code, Cursor, WebStorm, or any IDE with TypeScript support. The project uses TypeScript in strict mode, React 18, Vitest, Testing Library, and tsdown.
+The project uses TypeScript in strict mode, React 18, Vitest, Testing Library, and tsdown.
 
 ```bash
 pnpm run typecheck
@@ -132,40 +150,44 @@ pnpm run build
 pnpm pack
 ```
 
-The test suite is organized as follows:
+Source layout:
 
-- `extract.spec.ts`: groups completed turns from raw Session logs by completion boundary.
-- `repository.spec.ts`: covers linear imports, persistent tray order, child-Session merge commits, and deferring changes until the initial read completes.
-- `workspace-repositories.spec.ts`: covers per-folder ledger isolation, scope ids that remain stable across browsers, and attaching new merge Sessions to their source folders.
-- `graph-domain.spec.ts`: covers ledger schema round trips, scope-id validation, and ledger RPC decoders.
-- `graph-medium.spec.ts`: writes, closes, and reopens the real JSON storage backend.
-- `graph.spec.ts`: covers primary-line ancestry, sibling branches, merge edges, and missing-dependency warnings.
-- `history.spec.ts`: covers private payload validation, the `PA1 + PA7 → Turn 1 + Turn 2 → PA9 Turn 3` regression, and the `ignorable` merge-provenance seed event.
-- `components.spec.tsx`: covers separation between `HEAD`, preview, and selection, plus composer behavior when branch creation fails.
-- `project-history.spec.ts`: covers completed-turn extraction, fork-seed metadata, and RPC payload validation.
-- `project-graph.spec.ts`: covers fork deduplication, exact preservation of merge relationships, and timeline prefixes.
-- `preview-cache.spec.ts`: covers reading each PA once, local assembly of the selected order, and cache eviction.
-- `live-turn.spec.ts`: covers the Chat History live tail projected from the running turn (partial answer, running tool calls, open turns only).
-- `project-page.spec.tsx` / `project-bridge.spec.tsx`: cover timeline scrubbing, detail inspection, retry, source navigation, DOM reinjection, and cleanup.
+- `src/index.ts`: the Host plugin. It registers the RPCs, composes Session seeds, and reads and writes the ledger.
+- `src/graph-ledger.ts`: ledger logic shared by both halves—identity, number finalization, semantic validation, node replacement, and repair.
+- `src/history.ts`, `src/merge-lineage.ts`, `src/project-history.ts`, `src/history-preview.ts`: Host-side history composition, the provenance event, and log projections.
+- `src/protocol.ts`: RPC endpoints and strict decoders.
+- `src/client/repository.ts`: the browser ledger's read, write queue, and subscription.
+- `src/client/ledger-transitions.ts`: pure ledger transitions—importing a Session, recognising official forks, registering a new Chat, and adopting the project graph.
+- `src/client/project-graph.ts`: project graph assembly.
+- `src/client/GraphView.tsx`, `GraphCanvas.tsx`, `ContextTray.tsx`, `ChatHistoryPreview.tsx`, and the rest: the interface.
 
-To run a smoke test without modifying the user's real DSH profile:
+Tests by layer:
+
+- **Ledger:** `graph-integrity.spec.ts` (fork numbering, one occurrence per Session, legacy-ledger repair, needless writes), `graph-correctness.spec.ts` (finalization order, Context references, the revision check), `repository.spec.ts`, `workspace-repositories.spec.ts`, `graph-domain.spec.ts`, `graph-medium.spec.ts` (a round trip through the real JSON storage backend), `graph.spec.ts`, `labels.spec.ts`.
+- **Host:** `history.spec.ts` (seed composition, identity checks, the `ignorable` provenance event), `merge-rpc.spec.ts` (the Fork, Merge, and anchor RPC flows end to end), `project-history.spec.ts`, `history-preview.spec.ts`.
+- **Project graph:** `project-graph.spec.ts`, `project-page.spec.tsx`, `project-bridge.spec.tsx`.
+- **Interface:** `components.spec.tsx`, `graph-canvas-design.spec.tsx`, `graph-canvas-selection.spec.tsx`, `graph-canvas-zoom.spec.tsx`, `history-rail.spec.tsx`, `chat-history-preview.spec.tsx`, `preview-markdown.spec.tsx`, `preview-cache.spec.ts`, `live-turn.spec.ts`, `extract.spec.ts`.
+- **Composer and tray:** `composer-send-guard.spec.ts`, `composer-discard-action.spec.tsx`, `composer-block-lease.spec.ts`, `context-tray-channel.spec.ts`, `context-tray-dock.spec.tsx`, `context-tray-slot.spec.ts`, `anchor-client.spec.ts`.
+
+To run a smoke test without touching your real DSH profile, point `DSH_HOME` at a temporary directory:
 
 ```bash
 export DSH_HOME=/tmp/dsh-git-validation-home
-cd ../deepseek-harness
-pnpm dsh plugin --profile web add ../dsh-git
-pnpm dsh --profile web --dump-config
-pnpm dsh --profile web
+corepack pnpm --dir ../deepseek-harness dsh plugin --profile web add "$PWD"
+corepack pnpm --dir ../deepseek-harness dsh --profile web --dump-config
+corepack pnpm --dir ../deepseek-harness dsh --profile web --port 0
 ```
 
-The configuration output must end with a `# == dsh-git` layer. The browser must contain `style[data-plugin="dsh-git"]`, and the console must report no errors.
+The configuration output must end with a `# == dsh-git` layer. The page that opens must contain `style[data-plugin="dsh-git"]`, and the console must report no errors.
 
 ## Known limitations
 
 - `dsh-git` does not automatically decide whether a piece of history is correct, trustworthy, or useful. It provides context visualization, provenance, selection, and composition; the final judgment remains with the user.
-- Graph data is persisted with the DSH profile. Ledgers saved by the previous `localStorage` version are not migrated. When an affected Session is viewed, its graph is re-imported from the Session log, but branch names and old merge parents stored only in the browser are lost.
-- The ledger does not push changes across tabs. Two tabs open on the same scope each hold an in-memory copy, and the last write wins; `domain/changed` broadcasts only within the Host process.
-- Project graph PA data is reloaded from the Host on every request. Merge Sessions created by the current version store provenance in their logs; older merge Sessions still depend on the ledger for exact multi-parent metadata. If the ledger is missing, the project graph shows only the provable primary lineage rather than guessing missing merge parents.
-- Turns created before the plugin was installed are imported when their Sessions are viewed. DSH forks not created by dsh-git cannot be deduplicated into a shared PA identity.
-- Only selected completed turns are written into the merge Session seed. Unselected ancestor turns are not inherited implicitly.
-- Core trajectory events are copied, while source-plugin-specific log-only events are excluded from the merge seed.
+- Only Harness 0.1.2-rc.1 is supported; see "Version requirements".
+- The ledger does not synchronize across tabs. With two tabs open on one Workspace, the later writer is refused by the Host and the page shows a notice asking for a reload; reloading restores it.
+- The PA Context Window of an ordinary turn reads "Actual request Context is unknown". The ledger records only the Context explicitly selected for a Fork or Merge, and does not infer what an ordinary turn carried from its visible parent chain.
+- An official fork is recognised by matching Prompt and Answer text at the same turn numbers in the child and parent Sessions. When the child is read before its parent, it is folded only once the parent is in the ledger too.
+- The Host creates the new Session and the browser registers it in the ledger afterwards; there is no transaction across the two. If the browser's registration is lost, the project graph still restores the parents from the `dsh-git/merge` event in the log. Merge Sessions older than that event depend on the ledger alone.
+- Only selected completed turns are written into the new Session's seed; unselected ancestor turns are not inherited implicitly. Core trajectory events are copied, while source-plugin-specific log-only events are excluded.
+- A draft containing `@` references or other structured content cannot be forked, merged, or sent as an anchored question.
+- Lines in the graph may cross each other and may pass through nodes; there is no obstacle avoidance.

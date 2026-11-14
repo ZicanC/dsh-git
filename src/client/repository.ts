@@ -169,7 +169,7 @@ export class GraphRepository {
     })
   }
 
-  /** Leave anchor mode after the Host has cleaned up any unused Workspace. */
+  /** Leave anchor mode. The Host keeps the Anchor Workspace so the same PAs can resume it. */
   cancelAnchor(sessionId: string): void {
     this.run(() => {
       if (this.state.anchors[sessionId] === undefined) return

@@ -6,7 +6,7 @@
 
 长期对话中，错误结论、过时假设、失败尝试和无关工具输出可能被后续回合持续继承。这个项目的核心目的，是让人明确选择可信且相关的回合，组成下一段对话的历史，避免默认沿用整段旧对话而造成上下文污染。
 
-每个完整的“提问 + 回答”回合都相当于一次提交。你可以从任意分支 cherry-pick 多个回合，按指定顺序将它们重组为一段新的对话历史，再从这里继续提问。重组后的回合会作为真实、完整的 DSH 历史记录写入，而不是以一段上下文的形式附加到提示词中。因此，对 agent 而言，重组的历史与它亲历的对话没有区别。
+每个完整的「提问 + 回答」回合都相当于一次提交。你可以从任意会话 cherry-pick 多个回合，按指定顺序将它们重组为一段新的对话历史，再从这里继续提问。重组后的回合会作为真实、完整的 DSH 历史记录写入，而不是以一段上下文的形式附加到提示词中。因此，对 agent 而言，重组的历史与它亲历的对话没有区别。
 
 `dsh-git` 是一款适用于 DeepSeek Harness Web 的插件。
 
@@ -14,116 +14,134 @@
 
 | Git | dsh-git |
 | --- | --- |
-| `commit` | 每个完成的“提问 + 回答”回合都是一个 `PA` 节点：原子化、可寻址，且不会被原地改写。 |
-| `log --graph` | 每个会话都有一张 **Conversation Graph**，每个 Workspace 都有一张项目图；两者均显示分叉、merge 边和 `HEAD`。 |
-| `HEAD` | 当前活动节点；其状态与节点预览、上下文选择相互独立。 |
-| `checkout` | 使用 **切换到此分支**，打开该节点对应的 DSH 会话。 |
-| `cherry-pick` | 从任意分支勾选 PA 节点，并将其加入有序的 **Context Tray**。 |
-| `rebase` | 宿主端按照托盘中的顺序，将所选回合重新编号为一段连续的新历史。 |
-| `branch` | 从托盘发起提问时，宿主端会以这段历史为种子创建新会话。 |
-| `merge` | 新一轮的 Prompt 与 Answer 会成为一个记录全部来源的多父 DAG 节点。 |
+| `commit` | 每个完成的「提问 + 回答」回合都是一个 `PA` 节点：原子化、可寻址，写入后不被改写。 |
+| `log --graph` | 每个会话的 **分支** 标签页有一张 **Conversation Graph**，每个 Workspace 有一张项目图；两者都显示分叉、fork 副本、merge 轨道和 `HEAD`。 |
+| `HEAD` | 当前会话历史里的最后一个节点。它与节点检查、上下文选择相互独立。 |
+| `checkout` | 在项目图里点 **打开原会话**，跳到某个 PA 所在的会话。 |
+| `cherry-pick` | 点开任意会话的 PA，用 **加入 Context** 把它放进有序的 **Context Tray**。 |
+| `rebase` | 宿主端按照托盘中的顺序，把所选回合重新编号为一段连续的新历史。 |
+| `branch` | 选择只来自一个会话时，托盘按钮是 **Fork**：以这段历史新建一个 Chat。 |
+| `merge` | 选择来自多个会话时，按钮是 **Merge**：新 Chat 的第一个回合成为记录全部来源的多父节点。 |
 
 ## 主要功能
 
-这些功能让使用者先检查信息的内容与来源，再明确决定哪些历史可以进入下一段对话。
+- **Conversation Graph：** 每个会话的 **分支** 标签页左侧是一张紧凑的对话图。点节点只是检查：打开 PA Context Window，显示它的 Prompt、Answer 和回答时使用的 Context，不改变选择，也不切换会话。
+- **Chat History 预览：** 标签页右侧按托盘顺序显示当前选择合并后的完整聊天记录，包括工具调用和正在生成的回合。Fork 或 Merge 之前就能看到新 Chat 的历史会是什么样。
+- **有序的 Context Tray：** 托盘停靠在官方输入框上方。只有明确加入的 PA 才会进入新历史；拖动标签可以调整发送给模型的顺序。同一个 PA 只占一格，改选它的另一个 fork 副本时原位替换。
+- **Fork 与 Merge：** 选择只来自一个会话是 Fork，来自多个会话是 Merge。按钮名称、图上的父关系和连线来自同一份判定。Merge 的每条来源会话只有一条入线，其余选中的 PA 属于 Context，不成线。
+- **官方 fork 去重：** 通过 Harness 官方功能创建的 fork 会共享继承的历史前缀。复制出的末端回合显示为带 `FORK` 徽标的副本，沿用原 PA 的编号，后续 PA 从这个副本往下延伸。
+- **锚定模式：** 点 **锚定** 冻结当前选择。此后从这个 Chat 发出的每个问题，都会在专用的 Anchor Workspace 里各开一个独立的子会话，以冻结的 PA 为历史。适合对同一份上下文并列地问多个问题。
+- **Workspace 项目图：** 把鼠标悬停在 Workspace 行上，点图按钮查看该 Workspace 里所有已完成的 PA。项目图接管主栏、只读，不切换当前会话。底部的 **PA 时间轴** 按完成时间排列，向左拖动可以回看图是怎样长出来的。
+- **宿主端持久化：** 每个 Workspace 文件夹有一份独立的图账本，随 DSH 配置保存，不依赖当前浏览器。不属于任何文件夹的会话各自使用独立账本。
 
-- **会话级对话图：** 每个会话都有一张紧凑的 **Conversation Graph**。通过 Harness 官方功能创建的 fork 会共享继承的历史前缀；复制出的末端回合显示为 `PA<n> fork` 分支标记，后续 PA 则从该标记继续延伸。只有点击 PA 节点后，才会显示其 Prompt、Answer 和历史上下文，便于在选择前检查内容及其来源。
-- **Workspace 项目图：** 点击 Workspace 行旁的图按钮，即可查看该 Workspace 中所有已完成的 PA。重复的 fork 历史会折叠为 `PA<n> fork` 分支标记，且不占用新的 PA 编号。项目图会接管主栏，但不会切换当前会话。
-- **PA 时间轴：** 项目图打开时默认显示完整历史。拖动时间轴可逐个回退已完成的 PA；每个会话产生的第一个新 PA 都会在轨道上标出。
-- **有序的 Context Tray：** 只有明确选中的节点才会进入新历史。新选中的节点默认按创建时间排列，也可以拖拽调整顺序；继续添加节点时，手动设定的顺序会保持不变。
-- **跨分支选择：** 可以自由选择不同分支上的 PA。若所选节点缺少直接前驱，系统会发出警告，提醒使用者检查上下文是否完整，但不会替使用者自动加入缺失节点。
-- **宿主端持久化：** 每个 Workspace 文件夹都有独立的图账本，用于保存分支名称、规范节点引用、上下文清单、预览状态和待处理的 merge 元数据。不属于任何文件夹的会话各自使用独立账本。图数据随 DSH 配置保存，不依赖当前浏览器。
+## 版本要求
+
+本插件对接 **DeepSeek Harness 0.1.2-rc.1**（标签 `dsh-v0.1.2-rc.1`）。类型检查、测试和 `lib/` 的构建都以这个版本为准。
+
+Harness 当前的 `master`（0.2.2）已经移除了本插件依赖的 `@deepseek-ai/dsh-agent-presets` 包，会话事件和输入框接口也有变化，插件在那里无法构建。迁移到新版 Harness 是一项单独的工作。
+
+需要 Node `^22.19.0 || >=24.0.0`。Harness 的这个版本固定使用 pnpm 11.7.0，下面的命令通过 `corepack` 调用它。
 
 ## 安装
 
-`dsh-git` 只提供插件，不包含 `dsh` 可执行文件。如果使用 DeepSeek Harness 的源码检出，请从该检出目录调用 CLI。以下命令假设 DeepSeek Harness 位于同级目录 `../deepseek-harness`：
+`dsh-git` 只提供插件，不包含 `dsh` 可执行文件。开发依赖链接到同级目录的 Harness 源码检出，所以先准备好它：
+
+```bash
+git clone https://github.com/deepseek-ai/deepseek-harness.git ../deepseek-harness
+git -C ../deepseek-harness checkout dsh-v0.1.2-rc.1
+corepack pnpm --dir ../deepseek-harness install
+corepack pnpm --dir ../deepseek-harness run build:lib
+corepack pnpm --dir ../deepseek-harness run build:web
+```
+
+`build:lib` 生成插件链接所指向的各个包；`build:web` 生成网页前端，不构建它的话 Web UI 首页是 404。
+
+然后构建并安装插件：
 
 ```bash
 pnpm install
 pnpm run build
-pnpm --dir ../deepseek-harness dsh plugin --profile web add "$PWD"
-pnpm --dir ../deepseek-harness dsh --profile web
+corepack pnpm --dir ../deepseek-harness dsh plugin --profile web add "$PWD"
+corepack pnpm --dir ../deepseek-harness dsh --profile web
 ```
 
-如果已全局安装 `dsh`，且 `command -v dsh` 能输出其路径，也可以改用较短的 `dsh plugin ...` 和 `dsh --profile web` 命令。请勿在本插件仓库中运行 `pnpm dsh`：pnpm 只会查找当前项目提供的脚本和可执行文件，而本项目并未提供这两者。
+如果已全局安装 `dsh`，且 `command -v dsh` 能输出其路径，也可以改用较短的 `dsh plugin ...` 和 `dsh --profile web`。请勿在本插件仓库中运行 `pnpm dsh`：pnpm 只会查找当前项目提供的脚本和可执行文件，而本项目两者都没有。
 
-打开 Web UI 后，可以通过以下任一方式进入图视图：
-
-- 在会话至少完成一个回合后，选择 **分支** 标签页。
-- 将鼠标悬停在 Workspace 行上，点击图按钮，打开完整的项目图。
+构建后的插件不包含本地路径：除了由 DSH 通过客户端模块表提供的 React 之外，浏览器 bundle 完全自包含。构建产物 `lib/` 随包一同发布，安装发布版压缩包时无需再构建。
 
 卸载插件：
 
 ```bash
-pnpm --dir ../deepseek-harness dsh plugin --profile web remove dsh-git
+corepack pnpm --dir ../deepseek-harness dsh plugin --profile web remove dsh-git
 ```
-
-目前，开发依赖链接到同级的 `../deepseek-harness` 源码检出，因为公开的 rc.1 依赖图引用了一个尚未发布的包。构建后的插件不包含该本地路径：除了由 DSH 通过客户端模块表提供的 React 之外，浏览器 bundle 完全自包含。构建产物 `lib/` 会随包一同发布，因此安装发布版压缩包时无需执行构建脚本。
 
 ## 使用流程
 
-当当前会话已经混入错误假设、失败尝试或无关内容时，不必继续沿用整段历史。可以从图中选择仍然可信且相关的 PA，按需要重新排列，并以此创建一条新的对话分支。
+当前会话已经混入错误假设、失败尝试或无关内容时，不必继续沿用整段历史。
 
 1. 在 DSH 中完成一个或多个普通回合。
-2. 打开 **分支** 标签页。当前主线显示为实线，活动节点标记为 `HEAD`。
-3. 勾选任意 PA 节点。节点会按创建时间进入 Context Tray。
-4. 拖动标签（chip），设置发送给模型的确切顺序。
-5. 输入下一个问题，然后选择 **创建 merge branch 并提问**。
-6. 插件以所选回合为有序历史创建新会话，打开该会话并发送问题；回答完成后，`HEAD` 会移动到新节点。
+2. 打开 **分支** 标签页。当前会话的历史默认全部选中，显示为蓝色，最后一个节点标着 `HEAD`。
+3. 点任意节点检查它；在 PA Context Window 里点 **加入 Context** 或 **移出 Context**。
+4. 在输入框上方的 Context Tray 里拖动标签，设置发送给模型的顺序。右侧的 Chat History 会跟着更新。
+5. 在官方输入框里写下一个问题，然后点托盘上的 **Fork** 或 **Merge**。
+6. 插件以所选回合为有序历史创建新 Chat，把草稿转移过去并打开它。发送后，回答完成时新节点出现在图上。
 
-点击节点只会预览其内容，不会改变上下文或当前会话。使用勾选框选择上下文，使用 **切换到此分支** 检出相应分支。
+选择被改动、还没有 Fork 或 Merge 时，输入框照常可以打字，但回车和发送按钮会被拦下，避免把问题发进旧会话。想放弃改动，点输入框旁的 **放弃更改并发送**：选择恢复为当前会话的完整历史，问题发往原会话。
 
-项目图为只读视图。点击 PA 可打开详情检查器；点击 **打开原会话**，可关闭项目图并跳转到来源会话。底部滑块默认停在最右侧的 PA；向左拖动时，所有在该完成时点之后才出现的 PA 和边都会隐藏。
+### 锚定模式
+
+1. 选好 PA，点 Conversation Graph 标题栏的 **锚定**。
+2. 插件在当前 Workspace 目录下创建一个 `dsh-git-anchors-…` 子目录，并把它登记为 Anchor Workspace。
+3. 之后从这个 Chat 发出的每个问题，都在 Anchor Workspace 里各开一个独立子会话。原会话不变。
+4. 再点一次按钮取消锚定。Anchor Workspace 会保留；再次锚定同一组 PA 时继续使用它。
+
+Anchor Workspace 的项目图里，冻结的 PA 保留原编号，各子会话自己的回合标为 `S<n>.<m>`。
 
 ## 数据模型
 
-DSH 会话日志按时间顺序追加，已有记录不会被改写。`dsh-git` 在此基础上增加一张由宿主端管理的语义图：
+DSH 会话日志按时间顺序追加，已有记录不会被改写。`dsh-git` 在此基础上增加一张语义图。几个关键概念：
 
-```ts
-interface TurnNode {
-  id: string
-  sessionId: string
-  turn: number
-  primaryParentId: string | null
-  parentIds: readonly string[]
-  contextManifest: readonly string[]
-  prompt: string
-  answer: string
-  branchId: string
-}
-```
+- **PA 身份与出现位置：** 同一个 PA 可以出现在多个会话里（原出现位置和 fork 副本）。身份决定编号，出现位置决定它画在哪、属于哪个会话。
+- **PA 编号：** 在一个账本作用域内分配，显示之后永不改变。fork 副本不占编号。
+- **父关系：** `parentIds` 决定图上的线。普通回合的父是同会话的上一轮；Merge 节点每条来源会话一个父。
+- **Context：** `contextRefs` 记录一个回合实际带了哪些 PA、什么顺序、沿哪个会话的历史选中。它只用于点开节点时的高亮，不画成线。
 
-`primaryParentId` 决定高亮显示的主线，`parentIds` 决定图中的边，`contextManifest` 则记录创建新会话历史时所选 PA 的确切顺序。
+完整的字段、判定规则和不变量见 [`docs/conversation-graph-logic.md`](./docs/conversation-graph-logic.md)。
 
 ## 图数据的存储方式
 
-宿主端维护两类记录，并根据数据写入后是否还会变化来划分用途。
+**图账本**存放在名为 `dsh_git_graph` 的 `dsh-storage-domain` 域中，每个作用域一条记录：Workspace 文件夹中的会话使用 `workspace:<id>`，不属于任何文件夹的会话使用 `session:<id>`。账本保存节点、分支、会话回合索引、待处理的 merge 配方和锚定绑定。选择、检查和托盘顺序属于视图，不写进账本。
 
-**图账本**存放在名为 `dsh_git_graph` 的 `dsh-storage-domain` 域中，每个作用域对应一条记录：Workspace 文件夹中的会话使用 `workspace:<id>`，不属于任何文件夹的会话使用 `session:<id>`。账本保存全部可变状态，包括节点、分支及其名称、会话回合引用、待处理的 merge、`HEAD`、预览状态和 Context Tray 顺序。
+浏览器持有内存里的账本副本。挂载时按作用域读取一次，此后每次变更把完整记录写回宿主端，同一作用域的写入串行执行。首次读取完成前产生的变更会暂存，以免提前渲染的视图为宿主端已知的回合重复创建节点。在已经记录过的会话之间切换不会产生写入。
 
-浏览器持有供 React 渲染的权威内存副本。组件挂载时会按作用域读取一次账本，此后每次状态变更都会将完整记录写回宿主端。写入操作在每个作用域内串行执行，因此持久化账本不会落后于屏幕中的状态。首次读取完成前产生的变更会暂存，而不会立即应用，以免提前渲染的视图为宿主端已知的回合重复创建节点。
+宿主端在写入时把关：
 
-**Merge 溯源信息**还会写入 merge 会话自身的日志，即种子末尾的一条 `dsh-git/merge` 事件。该事件记录每个导入回合的宿主端坐标，包括 `sessionId`、turn、边界 seq，以及该回合在新会话中的回合号；它不依赖浏览器端的节点 id。因此，即使图账本丢失，也能仅凭日志重建 merge 分支。
+- **版本检查：** 每次写入都带着它所基于的版本号，与已存版本不一致就拒绝，已存账本保持不变。
+- **语义校验：** 有环、悬空引用、同一个会话里同一个 PA 出现两次、Merge 父关系与 Context 不一致等情况，整份写入被拒绝。
 
-该事件必须标记为 `ignorable`。如果日志中出现 `KNOWN_SESSION_EVENT_TYPES` 以外的事件类型，而写入方没有设置该标记，`session-persistence` 会拒绝解析整份日志；插件也无法扩展这个编译期集合。由于 `Session.append` 不支持传入该标记，插件会直接构造事件并将其放入种子——这是唯一支持该标记的写入路径。这也解释了插件为何不能向活动会话追加图元数据，以及可变账本为何使用存储域，而不是更多的会话事件。
+早期版本写下的账本可能把同一个回合存在两个 id 下。读取时会自动修复，不需要手动处理。
+
+**Merge 溯源信息**还会写入新会话自身的日志，即种子末尾的一条 `dsh-git/merge` 事件。它记录每个导入回合的宿主端坐标——`sessionId`、回合号、边界 seq、选中时所沿的会话，以及该回合在新会话中的回合号——不依赖浏览器端的节点 id。因此，即使图账本丢失，项目图也能仅凭日志还原 merge 的父关系。
+
+该事件必须标记为 `ignorable`。如果日志中出现 `KNOWN_SESSION_EVENT_TYPES` 以外的事件类型，而写入方没有设置该标记，`session-persistence` 会拒绝解析整份日志；插件也无法扩展这个编译期集合。由于 `Session.append` 不支持传入该标记，插件直接构造事件并放入种子——这是唯一支持该标记的写入路径。这也是插件不能向活动会话追加图元数据、可变账本使用存储域的原因。
 
 ## 宿主端历史合成
 
-浏览器通过一条私有命令，仅发送所选来源的坐标：`sessionId`、turn 和已完成回合的边界。宿主端会校验这些坐标，读取对应的规范会话日志，按照 Context Tray 中的顺序重新编号所选的已完成回合，再以这份结构完整的种子创建新 agent。在正常发送下一个问题之前，新会话会先加入来源会话所在的 Workspace。
+浏览器通过私有 RPC 只发送所选来源的坐标：`sessionId`、回合号和已完成回合的边界，外加选中时所沿的会话。宿主端先沿日志里的精确来源关系核对每个坐标的身份——同一个 PA 被选了两次，或者某个坐标并不属于它声称的会话历史，都会整笔拒绝，不创建任何东西。通过之后，宿主端读取规范会话日志，按托盘顺序重新编号所选回合，以这份结构完整的种子创建新 agent，并把新会话加入来源会话所在的 Workspace。
 
-这一过程只会改变对话历史。文件仍由整个工作区共享，不会随对话分支一同分叉。
+这一过程只改变对话历史。文件仍由整个 Workspace 共享，不随对话分支一同分叉。
 
 ## 项目图的数据读取
 
-宿主端会在 `/dsh-git` 下注册一个私有的 trusted-host Connection RPC。项目图请求只携带 Workspace id。宿主端解析该 Workspace 登记的全部会话 id，通过 `sessionQuery` 读取其完整的规范日志，再返回标准化的已完成 PA 记录，其中包含开始与完成时间、fork 种子边界和内容指纹。尚未完成的回合不会返回。
+宿主端在 `/dsh-git` 下注册一个私有的 trusted-host Connection RPC。项目图请求只携带 Workspace id。宿主端读取该 Workspace 登记的全部会话的完整规范日志，返回标准化的已完成 PA 记录：开始与完成时间、fork 种子边界、内容指纹和 merge 溯源。尚未完成的回合不会返回。
 
-浏览器会将响应与现有语义图合并。已知的 dsh-git merge 节点会保留精确的多父关系和上下文元数据。对于通过官方功能创建的普通 fork，继承的回合会沿用已经证实的父系谱；只有被复制的末端 PA 会显示为并列的 `PA<n> fork` 别名，第一个真正新增的 PA 则从该别名继续延伸。来源不明的旧复制回合会保持独立，系统不会猜测可能错误的边。
+浏览器把响应与账本拼成一张图并并入账本。dsh-git 创建的会话按日志里的精确坐标还原父关系；官方 fork 的继承回合并入父会话的节点，末位显示为 fork 副本；来源不明的旧复制回合保持独立，不猜边。
 
-DeepSeek Harness 目前没有开放项目行操作或项目页插槽，因此，项目图按钮与主栏接管逻辑集中在一个兼容桥中，通过语义化 DOM 属性和 `MutationObserver` 实现。如果 Harness 的侧边栏 DOM 发生变化，可能需要更新这一适配器；PA 数据协议和图页面不受其影响。
+DeepSeek Harness 目前没有开放项目行操作或项目页插槽，因此项目图按钮与主栏接管集中在一个兼容桥里，通过语义化 DOM 属性和 `MutationObserver` 实现。输入框发送拦截同理，工作在输入框卡片的 DOM 边缘。如果 Harness 的侧边栏或输入框 DOM 发生变化，这两处适配可能需要更新；PA 数据协议和图页面不受影响。
 
 ## 开发与测试
 
-可以使用 VS Code、Cursor、WebStorm 或任何支持 TypeScript 的 IDE。项目采用 TypeScript 严格模式、React 18、Vitest、Testing Library 和 tsdown。
+项目采用 TypeScript 严格模式、React 18、Vitest、Testing Library 和 tsdown。
 
 ```bash
 pnpm run typecheck
@@ -132,40 +150,44 @@ pnpm run build
 pnpm pack
 ```
 
-测试分层如下：
+源码结构：
 
-- `extract.spec.ts`：从原始会话日志中按已完成回合的边界进行分组。
-- `repository.spec.ts`：线性导入、托盘顺序持久化、子会话 merge 提交，以及首次读取完成前的变更暂存机制。
-- `workspace-repositories.spec.ts`：按文件夹隔离账本、跨浏览器保持稳定的作用域 id，以及将新的 merge 会话固定到来源文件夹。
-- `graph-domain.spec.ts`：账本 schema 往返转换、作用域 id 校验和账本 RPC 解码器。
-- `graph-medium.spec.ts`：使用真实 JSON 存储后端执行写入、关闭和重新打开测试。
-- `graph.spec.ts`：主线谱系、同级分支、merge 边和缺失依赖警告。
-- `history.spec.ts`：私有载荷校验、`PA1 + PA7 → Turn 1 + Turn 2 → PA9 Turn 3` 回归，以及标记为 `ignorable` 的 merge 溯源种子事件。
-- `components.spec.tsx`：`HEAD`、预览与选择三种状态的相互独立，以及分支创建失败时输入框的行为。
-- `project-history.spec.ts`：已完成回合提取、fork 种子元数据和 RPC 载荷校验。
-- `project-graph.spec.ts`：fork 去重、精确保留 merge 关系和时间轴前缀。
-- `preview-cache.spec.ts`：每个 PA 只读取一次、在本地按所选顺序组装，以及缓存淘汰。
-- `live-turn.spec.ts`：由进行中回合投影出的 Chat History 实时片段（流式回答、运行中的工具调用，且只投影未结束的回合）。
-- `project-page.spec.tsx` / `project-bridge.spec.tsx`：时间轴回放、详情检查、重试、来源导航、DOM 重新注入和清理。
+- `src/index.ts`：宿主端插件，注册 RPC、合成会话种子、读写账本。
+- `src/graph-ledger.ts`：两端共用的账本逻辑——身份、编号定稿、语义校验、节点替换与修复。
+- `src/history.ts`、`src/merge-lineage.ts`、`src/project-history.ts`、`src/history-preview.ts`：宿主端的历史合成、溯源事件和日志投影。
+- `src/protocol.ts`：RPC 端点和严格解码器。
+- `src/client/repository.ts`：浏览器端账本的读取、写入队列和订阅。
+- `src/client/ledger-transitions.ts`：账本的纯状态转换——导入会话、识别官方 fork、登记新 Chat、并入项目图。
+- `src/client/project-graph.ts`：项目图的组装。
+- `src/client/GraphView.tsx`、`GraphCanvas.tsx`、`ContextTray.tsx`、`ChatHistoryPreview.tsx` 等：界面。
 
-如需在不修改用户真实 DSH 配置的情况下进行冒烟测试：
+测试按层分布：
+
+- **账本：** `graph-integrity.spec.ts`（fork 编号、一个会话一个出现位置、旧账本修复、无谓写入）、`graph-correctness.spec.ts`（定稿顺序、Context 引用、版本检查）、`repository.spec.ts`、`workspace-repositories.spec.ts`、`graph-domain.spec.ts`、`graph-medium.spec.ts`（真实 JSON 存储后端的读写往返）、`graph.spec.ts`、`labels.spec.ts`。
+- **宿主端：** `history.spec.ts`（种子合成、身份校验、`ignorable` 溯源事件）、`merge-rpc.spec.ts`（Fork、Merge 和锚定的 RPC 全流程）、`project-history.spec.ts`、`history-preview.spec.ts`。
+- **项目图：** `project-graph.spec.ts`、`project-page.spec.tsx`、`project-bridge.spec.tsx`。
+- **界面：** `components.spec.tsx`、`graph-canvas-design.spec.tsx`、`graph-canvas-selection.spec.tsx`、`graph-canvas-zoom.spec.tsx`、`history-rail.spec.tsx`、`chat-history-preview.spec.tsx`、`preview-markdown.spec.tsx`、`preview-cache.spec.ts`、`live-turn.spec.ts`、`extract.spec.ts`。
+- **输入框与托盘：** `composer-send-guard.spec.ts`、`composer-discard-action.spec.tsx`、`composer-block-lease.spec.ts`、`context-tray-channel.spec.ts`、`context-tray-dock.spec.tsx`、`context-tray-slot.spec.ts`、`anchor-client.spec.ts`。
+
+如需在不修改真实 DSH 配置的情况下冒烟测试，把 `DSH_HOME` 指到一个临时目录：
 
 ```bash
 export DSH_HOME=/tmp/dsh-git-validation-home
-cd ../deepseek-harness
-pnpm dsh plugin --profile web add ../dsh-git
-pnpm dsh --profile web --dump-config
-pnpm dsh --profile web
+corepack pnpm --dir ../deepseek-harness dsh plugin --profile web add "$PWD"
+corepack pnpm --dir ../deepseek-harness dsh --profile web --dump-config
+corepack pnpm --dir ../deepseek-harness dsh --profile web --port 0
 ```
 
-配置输出必须以 `# == dsh-git` 层结尾；浏览器中必须存在 `style[data-plugin="dsh-git"]`，且控制台没有报错。
+配置输出必须以 `# == dsh-git` 层结尾；打开的页面里必须存在 `style[data-plugin="dsh-git"]`，且控制台没有报错。
 
 ## 已知限制
 
 - `dsh-git` 不会自动判断某段历史是否正确、可信或有用。它提供上下文的可视化、溯源、选择和重组能力，最终判断仍由使用者完成。
-- 图数据随 DSH 配置持久化。旧版通过 `localStorage` 保存的账本不会迁移：查看相应会话时，系统会根据会话日志重新导入图数据，但仅保存在浏览器中的分支名称和旧 merge 父节点会丢失。
-- 账本不支持跨标签页推送变更。同一作用域下打开的两个标签页各自持有一份内存副本，并以最后一次写入为准；`domain/changed` 只在宿主端进程内广播。
-- 项目图的 PA 数据每次都会从宿主端重新读取。当前版本创建的 merge 会话会将溯源信息写入日志；更早版本创建的 merge 会话仍依赖账本保存精确的多父元数据。账本缺失时，项目图只显示能够证实的主线谱系，不会推测缺失的 merge 父节点。
-- 安装插件前创建的回合会在相应会话被查看时导入。并非由 dsh-git 创建的 DSH fork 无法去重为共享的 PA 身份。
-- 只有选中的已完成回合会写入 merge 会话的种子；未选中的祖先回合不会被隐式继承。
-- 核心轨迹事件会被复制；来源插件特有、仅用于日志的事件则会从 merge 种子中排除。
+- 只支持 Harness 0.1.2-rc.1，见「版本要求」。
+- 账本不支持跨标签页同步。同一个 Workspace 开两个标签页时，后写入的那个会被宿主端拒绝，页面顶部提示重新加载；重新加载后恢复正常。
+- 普通回合的 PA Context Window 显示「实际请求 Context 未知」。账本只记录 Fork 或 Merge 时明确选中的 Context，不从可见的父链反推普通回合实际带了什么。
+- 官方 fork 的识别依靠子、父会话同回合号的 Prompt 和 Answer 文本一致。子会话比父会话先被读到时，要等父会话也进入账本才会折叠。
+- 新会话由宿主端创建，图账本由浏览器随后登记，两步之间没有事务。浏览器登记丢失时，项目图仍能从日志里的 `dsh-git/merge` 事件还原父关系。早于该事件引入的旧 merge 会话只能依赖账本。
+- 只有选中的已完成回合会写入新会话的种子；未选中的祖先回合不会被隐式继承。核心轨迹事件会被复制，来源插件特有、仅用于日志的事件会被排除。
+- 草稿里含有 `@` 引用等结构化内容时不能 Fork、Merge 或发送锚定问题。
+- 图上的连线可以交叉，也可能穿过节点；没有避障。

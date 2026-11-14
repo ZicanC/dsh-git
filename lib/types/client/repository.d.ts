@@ -68,6 +68,6 @@ export declare class GraphRepository {
     prepareMergedSession(input: PrepareMergedSessionInput): void;
     /** Freeze one source Session's selected context into an Anchor Workspace. */
     activateAnchor(sessionId: string, anchor: AnchorModeState): void;
-    /** Leave anchor mode after the Host has cleaned up any unused Workspace. */
+    /** Leave anchor mode. The Host keeps the Anchor Workspace so the same PAs can resume it. */
     cancelAnchor(sessionId: string): void;
 }
