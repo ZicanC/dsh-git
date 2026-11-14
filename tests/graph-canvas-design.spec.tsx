@@ -380,7 +380,6 @@ describe('GraphCanvas final visual design', () => {
       state={state}
       previewNodeId={merge.id}
       onPreview={vi.fn()}
-      nodeColors={new Map([[merge.id, 4]])}
     />)
 
     expect(graphNode(merge.id).style.width).toBe('132px')

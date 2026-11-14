@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { GraphCanvas, MAX_SCALE, MIN_SCALE } from '../src/client/GraphCanvas.tsx'
+import { GraphCanvas } from '../src/client/GraphCanvas.tsx'
+import { MAX_SCALE, MIN_SCALE } from '../src/client/pan-zoom.ts'
 import { ProjectGraphPage } from '../src/client/ProjectGraphPage.tsx'
 import { graph, node } from './fixtures.ts'
 import type { ProjectGraphResponse } from '../src/protocol.ts'

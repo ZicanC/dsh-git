@@ -61,18 +61,6 @@ export function ProjectGraphPage({
   const labels = useMemo(() => {
     return model === null ? new Map<TurnNodeId, string>() : nodeLabelMap(model.state)
   }, [model])
-  const nodeColors = useMemo(() => {
-    const colors = new Map<TurnNodeId, number>()
-    if (model === null) return colors
-    const sessions = new Map<string, number>()
-    const nodes = Object.values(model.nodes).sort((left, right) =>
-      left.sessionCreatedAt - right.sessionCreatedAt || left.id.localeCompare(right.id))
-    for (const node of nodes) {
-      if (!sessions.has(node.sessionId)) sessions.set(node.sessionId, sessions.size % 8)
-      colors.set(node.id, sessions.get(node.sessionId)!)
-    }
-    return colors
-  }, [model])
   const visible = model === null || model.timeline.length === 0 ? null : projectGraphAt(model, cursor)
   const selectedId = model?.timeline[Math.max(0, cursor - 1)]
   const selected = selectedId === undefined ? undefined : model?.nodes[selectedId]
@@ -106,7 +94,6 @@ export function ProjectGraphPage({
                 previewNodeId={inspectedId}
                 onPreview={setInspectedId}
                 labels={labels}
-                nodeColors={nodeColors}
               />
             </section>
             {inspected === undefined ? null : <aside className="dsh-git-project-inspector" aria-label={localized('项目 PA 详情', 'Project PA details', locale)}>

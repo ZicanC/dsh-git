@@ -1,6 +1,4 @@
 import type { GraphState, TurnNodeId } from './types.ts';
-export declare const MIN_SCALE = 0.25;
-export declare const MAX_SCALE = 2.5;
 /** Presentation-only props for the compact conversation tree. */
 export interface GraphCanvasProps {
     readonly state: GraphState;
@@ -16,8 +14,6 @@ export interface GraphCanvasProps {
     readonly disabled?: boolean;
     /** Optional project-level PA labels ordered by completion time. */
     readonly labels?: ReadonlyMap<TurnNodeId, string>;
-    /** @deprecated Accepted for caller compatibility; the final graph does not color nodes by Session. */
-    readonly nodeColors?: ReadonlyMap<TurnNodeId, number>;
 }
 /** Compact tree visualization: node details are intentionally kept out of the graph. */
 declare function GraphCanvasView({ state, previewNodeId, onPreview, selectedNodeIds, candidateNodeId, anchoredNodeIds, disabled, labels: suppliedLabels, }: GraphCanvasProps): import("react").JSX.Element;
