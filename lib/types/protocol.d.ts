@@ -1,6 +1,7 @@
 import type { MergeLineageSource } from './merge-lineage.ts';
 /** One graph node selected as a real historical turn in a new session. */
 export interface HistoryTurnSource {
+    readonly viaSessionId?: string;
     readonly sourceSessionId: string;
     readonly sourceTurn: number;
     readonly sourceBoundarySeq: number;
@@ -182,6 +183,7 @@ export interface GraphReadResponse {
 }
 /** Browser request replacing one scope's stored ledger. */
 export interface GraphWriteRequest {
+    readonly expectedRevision: number;
     readonly scopeId: string;
     readonly state: unknown;
 }

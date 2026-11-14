@@ -1,6 +1,7 @@
 import type { GraphState, TurnNodeId } from './types.ts';
 /** Presentation props for the ordered, page-local merge selection. */
 export interface ContextTrayProps {
+    readonly contextRefs?: readonly import('../graph-state.ts').ContextRef[];
     readonly state: GraphState;
     readonly selectedIds: readonly TurnNodeId[];
     /** Merge order as previewed: the selection with the candidate at its place. */
@@ -23,4 +24,4 @@ export interface ContextTrayProps {
     readonly onSendRefused: () => void;
 }
 /** Draggable ordered PA selection. The resident DSH composer remains below it. */
-export declare function ContextTray({ state, selectedIds, orderedIds, candidateId, busy, anchored, anchorWorkspaceTitle, error, dirty, overLimit, onMove, onMoveEnd, onRemove, onMerge, }: ContextTrayProps): import("react").JSX.Element | null;
+export declare function ContextTray({ state, selectedIds, orderedIds, candidateId, busy, anchored, anchorWorkspaceTitle, error, dirty, overLimit, contextRefs, onMove, onMoveEnd, onRemove, onMerge, }: ContextTrayProps): import("react").JSX.Element | null;

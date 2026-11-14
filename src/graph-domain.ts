@@ -9,6 +9,7 @@
  */
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { z } from 'zod'
+import { assertGraphSemantics } from './graph-ledger.ts'
 import type { GraphState } from './graph-state.ts'
 
 /** Ledger owner: one Workspace folder, or one folder-less Session. */
@@ -24,6 +25,11 @@ const nodeId = z.string().min(1)
 
 const turnNodeSchema = z.object({
   id: nodeId,
+  paId: nodeId.optional(),
+  ledgerOrdinal: z.number().int().positive().optional(),
+  finalOrdinal: z.number().int().positive().optional(),
+  contextKnown: z.boolean().optional(),
+  contextRefs: z.array(z.object({ paId: nodeId, viaSessionId: nodeId })).optional(),
   displayLabel: z.string().regex(/^(PA[1-9]\d*(?: fork)?|S[1-9]\d*\.[1-9]\d*)$/).optional(),
   sessionId: z.string().min(1),
   turn: z.number().int().nonnegative(),
@@ -48,6 +54,7 @@ const branchSchema = z.object({
 })
 
 const pendingMergeSchema = z.object({
+  contextRefs: z.array(z.object({ paId: nodeId, viaSessionId: nodeId })).optional(),
   branchId: z.string().min(1),
   parentIds: z.array(nodeId),
   primaryParentId: nodeId.nullable(),
@@ -66,8 +73,11 @@ const anchorModeSchema = z.object({
 })
 
 /** One scope's complete ledger, as stored and as accepted off the wire. */
-export const graphStateSchema: z.ZodType<GraphState> = z.object({
+const storedGraphShape: z.ZodType<GraphState> = z.object({
   format: z.literal(1),
+  revision: z.number().int().nonnegative().optional(),
+  ledgerSequence: z.number().int().nonnegative().optional(),
+  finalSequence: z.number().int().nonnegative().optional(),
   nodes: z.record(z.string(), turnNodeSchema),
   branches: z.record(z.string(), branchSchema),
   sessionBranches: z.record(z.string(), z.string().min(1)),
@@ -81,6 +91,13 @@ export const graphStateSchema: z.ZodType<GraphState> = z.object({
   contextManifest: z.array(nodeId),
 })
 
+/** Existing format-1 records remain readable; every new write receives semantic validation. */
+export const graphStateSchema = storedGraphShape.superRefine((state, ctx) => {
+  try { assertGraphSemantics(state) } catch (error: unknown) {
+    ctx.addIssue({ code: 'custom', message: error instanceof Error ? error.message : String(error) })
+  }
+})
+
 /**
  * The graph domain. `UNIT_NAME_RE` is `/^[a-z][a-z0-9_]*$/`, so the domain and
  * table names are underscore-separated rather than matching the package name.
@@ -89,7 +106,7 @@ export const GRAPH_DOMAIN = defineDomain({
   name: 'dsh_git_graph',
   version: 1,
   tables: {
-    scopes: domainTable<GraphScopeId, GraphState>(graphStateSchema),
+    scopes: domainTable<GraphScopeId, GraphState>(storedGraphShape),
   },
 })
 

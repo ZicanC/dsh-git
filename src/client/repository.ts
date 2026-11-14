@@ -1,4 +1,5 @@
-import { primaryPath } from './graph.ts'
+import { finalizeGraph } from '../graph-ledger.ts'
+import { normalizeContextOccurrences, paIdentityId, primaryPath } from './graph.ts'
 import type { GraphTransport } from './graph-transport.ts'
 import { EMPTY_GRAPH_STATE } from './types.ts'
 import type {
@@ -35,6 +36,11 @@ export class GraphRepository {
   private state: GraphState = EMPTY_STATE
   private readonly listeners = new Set<() => void>()
   private hydrated = false
+  private hydration: Promise<void> | undefined
+  private writeError: Error | null = null
+  private writeGeneration = 0
+
+  get persistenceError(): Error | null { return this.writeError }
   private deferred: Array<() => void> = []
 
   /**
@@ -62,23 +68,28 @@ export class GraphRepository {
   /**
    * Load this scope's stored ledger once, then release any deferred mutations.
    *
-   * A failed read still opens the gate: the graph rebuilds itself from the
-   * session logs the browser is already displaying, which is a better outcome
-   * than a permanently frozen tab.
+   * Failed reads keep the gate closed. A later retry hydrates the stored graph
+   * before replaying deferred observations, so a transient outage cannot erase it.
    */
   async hydrate(): Promise<void> {
     if (this.hydrated || this.transport === undefined || this.scopeId === undefined) return
-    let loaded = EMPTY_STATE
-    try {
-      loaded = await this.transport.read(this.scopeId)
-    } finally {
+    if (this.hydration !== undefined) return this.hydration
+    this.hydration = this.transport.read(this.scopeId).then(loaded => {
+      this.state = finalizeGraph(loaded)
       this.hydrated = true
-      this.state = loaded
+      this.writeError = null
       const pending = this.deferred
       this.deferred = []
       for (const mutation of pending) mutation()
       for (const listener of this.listeners) listener()
-    }
+    }).catch((error: unknown) => {
+      this.writeError = error instanceof Error ? error : new Error(String(error))
+      this.state = { ...this.state }
+      // Keep both the persisted ledger and deferred mutations intact for retry.
+      for (const listener of this.listeners) listener()
+      throw error
+    }).finally(() => { this.hydration = undefined })
+    return this.hydration
   }
 
   /** Apply one mutation now, or hold it until the Host ledger has landed. */
@@ -88,9 +99,21 @@ export class GraphRepository {
   }
 
   private commit(next: GraphState): void {
+    next = finalizeGraph(next)
     this.state = next
     if (this.transport !== undefined && this.scopeId !== undefined) {
-      void this.transport.write(this.scopeId, next).catch(() => undefined)
+      const generation = ++this.writeGeneration
+      void this.transport.write(this.scopeId, next).then(() => {
+        if (generation !== this.writeGeneration || this.writeError === null) return
+        this.writeError = null
+        this.state = { ...this.state }
+        for (const listener of this.listeners) listener()
+      }).catch((error: unknown) => {
+        if (generation !== this.writeGeneration) return
+        this.writeError = error instanceof Error ? error : new Error(String(error))
+        this.state = { ...this.state }
+        for (const listener of this.listeners) listener()
+      })
     }
     for (const listener of this.listeners) listener()
   }
@@ -114,7 +137,11 @@ export class GraphRepository {
       for (const [sessionId, refs] of Object.entries(this.state.sessionTurnRefs)) {
         sessionTurnRefs[sessionId] = { ...(sessionTurnRefs[sessionId] ?? {}), ...refs }
       }
-      const nodes = { ...observed.nodes, ...this.state.nodes }
+      // Observed graphs can originate in another scope; only our ledger owns numbering.
+      const imported = Object.fromEntries(Object.entries(observed.nodes).map(([id, node]) => [id,
+        this.state.nodes[id] === undefined ? { ...node, ledgerOrdinal: undefined, finalOrdinal: undefined } : node,
+      ]))
+      const nodes = { ...imported, ...this.state.nodes }
       const headNodeId = this.state.headNodeId !== null && nodes[this.state.headNodeId] !== undefined
         ? this.state.headNodeId
         : observed.headNodeId
@@ -187,7 +214,9 @@ export class GraphRepository {
         boundarySeq: turn.boundarySeq,
         primaryParentId,
         parentIds,
-        contextManifest: merge?.contextManifest ?? primaryPath({ ...next, nodes }, primaryParentId),
+        contextManifest: merge?.contextManifest ?? [],
+        contextKnown: merge !== undefined,
+        ...(merge?.contextRefs === undefined ? {} : { contextRefs: merge.contextRefs }),
         branchId,
       }
       nodes[nodeId] = node
@@ -263,6 +292,7 @@ export class GraphRepository {
         sessionId: childSessionId,
         turn: tip.turn,
         createdAt: markerCreatedAt,
+        finalOrdinal: next.nodes[markerId]?.finalOrdinal,
         branchId,
         primaryParentId: null,
         parentIds: [],
@@ -287,7 +317,8 @@ export class GraphRepository {
           ...node,
           primaryParentId: previousId,
           parentIds: [previousId],
-          contextManifest: primaryPath({ ...next, nodes }, previousId),
+          contextManifest: node.contextKnown === true ? node.contextManifest : [],
+          contextKnown: node.contextKnown ?? false,
         }
         previousId = entry.nodeId
       }
@@ -302,7 +333,7 @@ export class GraphRepository {
         parentIds: distinct(node.parentIds.map(replace)),
         contextManifest: distinct(node.contextManifest.map(replace)),
       }]))
-      const contextManifest = distinct(next.contextManifest.map(replace)).filter(nodeId => nodes[nodeId] !== undefined)
+      const contextManifest = normalizeContextOccurrences({ ...next, nodes }, next.contextManifest.map(replace))
       next = {
         ...next,
         nodes,
@@ -342,7 +373,8 @@ export class GraphRepository {
         id: markerId,
         sessionId: input.childSessionId,
         turn: inheritedTurn,
-        createdAt: forkSource.createdAt + 0.001,
+        createdAt: Date.now(),
+        finalOrdinal: undefined,
         branchId,
         primaryParentId: null,
         parentIds: [],
@@ -377,6 +409,7 @@ export class GraphRepository {
           parentIds: pendingParentIds,
           primaryParentId: pendingPrimaryParentId,
           contextManifest: [...input.contextManifest],
+          ...(input.contextRefs === undefined ? {} : { contextRefs: input.contextRefs }),
         },
       },
       headNodeId: inheritedHeadId,
@@ -425,6 +458,11 @@ export class GraphRepository {
       if (selected.has(nodeId)) {
         selected.delete(nodeId)
         this.commit({ ...this.state, contextManifest: this.state.contextManifest.filter(id => selected.has(id)) })
+        return
+      }
+      const equivalent = this.state.contextManifest.find(id => paIdentityId(this.state, id) === paIdentityId(this.state, nodeId))
+      if (equivalent !== undefined) {
+        this.commit({ ...this.state, contextManifest: this.state.contextManifest.map(id => id === equivalent ? nodeId : id) })
         return
       }
       const currentlyChronological = this.state.contextManifest.every((id, index, values) =>

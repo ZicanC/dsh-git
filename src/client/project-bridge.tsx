@@ -5,7 +5,7 @@ import type { IWorkspaces, WorkspaceView } from '@deepseek-ai/dsh-api-workspace-
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { ProjectConnection } from '../connection-contract.ts'
 import type { GraphRepository } from './repository.ts'
-import { restoreAnchorSourceLabels } from './project-graph.ts'
+import { assembleProjectGraph, restoreAnchorSourceLabels } from './project-graph.ts'
 import { ProjectGraphPage } from './ProjectGraphPage.tsx'
 import { localized } from './i18n.ts'
 import type { LocaleSource } from './i18n.ts'
@@ -98,7 +98,10 @@ export function installProjectBridge(services: ProjectBridgeServices): () => voi
         await sourceRepository.hydrate()
         sourceStates.set(sourceSessionId, sourceRepository.getSnapshot())
       }
-      return restoreAnchorSourceLabels(response, sourceStates)
+      await repository.hydrate()
+      const restored = restoreAnchorSourceLabels(response, sourceStates)
+      repository.adoptObservedGraph(assembleProjectGraph(restored, repository.getSnapshot()).state)
+      return restored
     }
     root.render(<ProjectGraphPage
       workspaceId={workspace.workspaceId}

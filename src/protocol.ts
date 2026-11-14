@@ -2,6 +2,7 @@ import type { MergeLineageSource } from './merge-lineage.ts'
 
 /** One graph node selected as a real historical turn in a new session. */
 export interface HistoryTurnSource {
+  readonly viaSessionId?: string
   readonly sourceSessionId: string
   readonly sourceTurn: number
   readonly sourceBoundarySeq: number
@@ -210,6 +211,7 @@ export interface GraphReadResponse {
 
 /** Browser request replacing one scope's stored ledger. */
 export interface GraphWriteRequest {
+  readonly expectedRevision: number
   readonly scopeId: string
   readonly state: unknown
 }
@@ -302,6 +304,7 @@ function jsonValue(value: unknown, label: string): HistoryPreviewJsonValue {
 function decodeHistoryTurnSource(value: unknown, label: string): HistoryTurnSource {
   const source = object(value, label)
   return {
+    ...(source.viaSessionId === undefined ? {} : { viaSessionId: nonBlank(source.viaSessionId, `${label} viaSessionId`) }),
     sourceSessionId: nonBlank(source.sourceSessionId, `${label} sourceSessionId`),
     sourceTurn: positiveInteger(source.sourceTurn, `${label} sourceTurn`),
     sourceBoundarySeq: nonNegativeInteger(source.sourceBoundarySeq, `${label} sourceBoundarySeq`),
@@ -499,7 +502,7 @@ export function decodeCreateMergedSessionRequest(value: unknown): CreateMergedSe
   rawSources.forEach((source, index) => {
     const sourceLabel = `${label} source ${index + 1}`
     exactKeys(object(source, sourceLabel), [
-      'sourceSessionId', 'sourceTurn', 'sourceBoundarySeq',
+      'sourceSessionId', 'sourceTurn', 'sourceBoundarySeq', 'viaSessionId',
     ], sourceLabel)
   })
   return {
@@ -634,6 +637,7 @@ function decodeMergeSources(value: unknown, label: string): readonly MergeLineag
       throw new Error(`${label} mergeSource ${index + 1} sourceLabel must be a PA number`)
     }
     return {
+      ...(source.viaSessionId === undefined ? {} : { viaSessionId: nonBlank(source.viaSessionId, `${label} viaSessionId`) }),
       sourceSessionId: nonBlank(source.sourceSessionId, `${label} mergeSource ${index + 1} sourceSessionId`),
       sourceTurn: positive(source.sourceTurn, 'sourceTurn'),
       sourceBoundarySeq: nonNegativeInteger(
@@ -666,7 +670,8 @@ export function decodeGraphReadResponse(value: unknown): GraphReadResponse {
 export function decodeGraphWriteRequest(value: unknown): GraphWriteRequest {
   const candidate = object(value, 'dsh-git graph write request')
   const state = object(candidate.state, 'dsh-git graph write request state')
-  return { scopeId: nonBlank(candidate.scopeId, 'scopeId'), state }
+  return { scopeId: nonBlank(candidate.scopeId, 'scopeId'), state,
+    expectedRevision: nonNegativeInteger(candidate.expectedRevision, 'expectedRevision') }
 }
 
 /** Strictly validate the project graph response received across Connection. */

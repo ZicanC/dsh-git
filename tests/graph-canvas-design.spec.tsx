@@ -162,10 +162,10 @@ describe('GraphCanvas final visual design', () => {
     expect(graphNode(existingMerge.id).dataset.layoutLane).toBe('2')
     expect(document.querySelector<SVGPathElement>(
       `[data-parent-id="${otherRoot.id}"][data-child-id="${existingMerge.id}"]`,
-    )?.getAttribute('d')).toBe('M 410 74 V 103 H 410 V 132')
+    )?.getAttribute('d')).toBe('M 410 74 V 85 Q 410 97 398 97 H 344 Q 332 97 332 109')
   })
 
-  it('chains multiple fork copies with adjacent arrows instead of crossing a copy', () => {
+  it('chains fork copies with symmetric dot-ended links instead of crossing a copy', () => {
     const firstFork = node({
       id: 'pa-chain-fork-one', createdAt: 2, forkSourceId: root.id,
       primaryParentId: null, parentIds: [],
@@ -180,6 +180,10 @@ describe('GraphCanvas final visual design', () => {
 
     const arrows = [...document.querySelectorAll(`[data-fork-source-id="${root.id}"]`)]
     expect(arrows).toHaveLength(2)
+    for (const link of arrows) {
+      expect(link.querySelectorAll('path')).toHaveLength(1)
+      expect(link.querySelectorAll('circle[r="3"]')).toHaveLength(2)
+    }
     expect(arrows[0]?.getAttribute('data-fork-from-id')).toBe(root.id)
     expect(arrows[0]?.getAttribute('data-fork-copy-id')).toBe(firstFork.id)
     expect(arrows[1]?.getAttribute('data-fork-from-id')).toBe(firstFork.id)
@@ -256,7 +260,7 @@ describe('GraphCanvas final visual design', () => {
     expect(document.querySelector<HTMLElement>('.dsh-git-tree-stage')?.style.width).toBe('664px')
   })
 
-  it('draws fixed-elbow black lines and solid purple merge lines into one target spine', () => {
+  it('draws rounded lineage tracks and merge branches into one left-side target spine', () => {
     render(<GraphCanvas state={state} previewNodeId={null} onPreview={vi.fn()} />)
 
     const ordinary = [...document.querySelectorAll<SVGPathElement>('[data-edge-kind="lineage"]')]
@@ -268,7 +272,7 @@ describe('GraphCanvas final visual design', () => {
     const siblingEdge = document.querySelector<SVGPathElement>(
       `[data-parent-id="${root.id}"][data-child-id="${sibling.id}"]`,
     )
-    expect(siblingEdge?.getAttribute('d')).toBe('M 98 74 V 103 H 254 V 132')
+    expect(siblingEdge?.getAttribute('d')).toBe('M 98 74 L 98 91 Q 98 103 110 103 L 242 103 Q 254 103 254 115 L 254 132')
 
     const rootMerge = document.querySelector<SVGPathElement>(
       `[data-parent-id="${root.id}"][data-child-id="${merge.id}"]`,
@@ -276,9 +280,57 @@ describe('GraphCanvas final visual design', () => {
     const forkMerge = document.querySelector<SVGPathElement>(
       `[data-parent-id="${forkChild.id}"][data-child-id="${merge.id}"]`,
     )
-    expect(rootMerge?.getAttribute('d')).toBe('M 106 74 V 103 H 566 V 232')
-    expect(forkMerge?.getAttribute('d')).toBe('M 410 174 V 203 H 566 V 232')
-    expect(STYLES).toContain('.dsh-git-tree-edge-merge{stroke:var(--dsh-git-merge-line);stroke-dasharray:none}')
+    expect(rootMerge?.getAttribute('d')).toBe('M 98 74 V 85 Q 98 97 110 97 H 476 Q 488 97 488 109')
+    expect(forkMerge?.getAttribute('d')).toBe('M 410 174 V 185 Q 410 197 422 197 H 476 Q 488 197 488 209')
+    expect(document.querySelector(`[data-merge-spine="${merge.id}"]`)?.getAttribute('d'))
+      .toBe('M 488 109 V 241 Q 488 253 500 253 H 500')
+    expect(document.querySelectorAll('[data-merge-target]')).toHaveLength(1)
+    expect(STYLES).toContain('.dsh-git-tree-edge-merge{stroke:var(--dsh-git-track-color);stroke-dasharray:none}')
+  })
+
+  it('cycles merge colors, separates reused gutters, and deduplicates shared departure dots', () => {
+    const otherRoot = node({ id: 'rail-other', createdAt: 2 })
+    const repeated = Array.from({ length: 5 }, (_, index) => node({
+      id: `rail-merge-${index}`, createdAt: index + 3,
+      parentIds: [root.id, otherRoot.id, root.id],
+    }))
+    const view = render(<GraphCanvas state={graph([root, otherRoot, ...repeated])}
+      previewNodeId={null} onPreview={vi.fn()} selectedNodeIds={[repeated[0]!.id]} />)
+    expect(document.querySelectorAll('[data-merge-source]')).toHaveLength(2)
+    expect(document.querySelectorAll('[data-merge-target]')).toHaveLength(5)
+    expect(document.querySelectorAll('[data-merge-spine]')).toHaveLength(5)
+    const colors = repeated.map(merge => graphNode(merge.id).style.getPropertyValue('--dsh-git-track-color'))
+    expect(new Set(colors)).toHaveProperty('size', 3)
+    expect(colors[0]).toBe(colors[3])
+    for (const merge of repeated) {
+      const color = graphNode(merge.id).style.getPropertyValue('--dsh-git-track-color')
+      expect(document.querySelector<SVGElement>(`[data-merge-id="${merge.id}"]`)
+        ?.style.getPropertyValue('--dsh-git-track-color')).toBe(color)
+      expect(document.querySelector<HTMLElement>(`[data-merge-legend="${merge.id}"]`)
+        ?.style.getPropertyValue('--dsh-git-track-color')).toBe(color)
+      expect(document.querySelectorAll(`[data-child-id="${merge.id}"]`)).toHaveLength(2)
+    }
+    expect(graphNode(repeated[0]!.id).getAttribute('aria-pressed')).toBe('true')
+    // Enough row spacing for every rounded departure before the following cards.
+    expect(Number.parseFloat(graphNode(repeated[0]!.id).style.top)).toBeGreaterThanOrEqual(133)
+    view.rerender(<GraphCanvas state={graph([root, otherRoot, ...repeated])}
+      previewNodeId={repeated[2]!.id} onPreview={vi.fn()} />)
+    expect(document.querySelectorAll('[data-merge-spine]')).toHaveLength(5)
+    expect(repeated.map(merge => graphNode(merge.id).style.getPropertyValue('--dsh-git-track-color'))).toEqual(colors)
+  })
+
+  it('keeps separate spines for merges that reuse a target column on later rows', () => {
+    const other = node({ id: 'reused-other', createdAt: 2 })
+    const child = node({ id: 'reused-child', createdAt: 3, parentIds: [root.id] })
+    const first = node({ id: 'reused-first', createdAt: 4, parentIds: [root.id, other.id] })
+    const second = node({ id: 'reused-second', createdAt: 5, parentIds: [child.id, other.id] })
+    render(<GraphCanvas state={graph([root, other, child, first, second])}
+      previewNodeId={null} onPreview={vi.fn()} />)
+    expect(graphNode(first.id).dataset.layoutLane).toBe(graphNode(second.id).dataset.layoutLane)
+    const spines = [first, second].map(merge => document.querySelector(`[data-merge-spine="${merge.id}"]`)
+      ?.getAttribute('d')?.split(' ')[1])
+    expect(spines[0]).not.toBe(spines[1])
+    expect(Number(spines[0]) - Number(spines[1])).toBe(6)
   })
 
   it('dims only nodes outside the inspected PA context and mutes unrelated fork arrows', () => {

@@ -1,6 +1,6 @@
 import {
   memo, useCallback, useEffect, useMemo, useRef, useState,
-  type FocusEvent as ReactFocusEvent, type PointerEvent as ReactPointerEvent,
+  type CSSProperties, type FocusEvent as ReactFocusEvent, type PointerEvent as ReactPointerEvent,
 } from 'react'
 import { orderedNodes } from './graph.ts'
 import { nodeLabelMap } from './labels.ts'
@@ -16,7 +16,13 @@ const VERTICAL_GAP = 58
 const LANE_STEP = NODE_WIDTH + HORIZONTAL_GAP
 const ROW_STEP = NODE_HEIGHT + VERTICAL_GAP
 const CONNECTOR_ELBOW = VERTICAL_GAP / 2
-const MERGE_PARALLEL_OFFSET = 8
+const TRACK_RADIUS = 12
+const TRACK_SEPARATION = 6
+const MERGE_COLORS = [
+  'light-dark(#a374d1,#b492e0)',
+  'light-dark(#d1815e,#e0a07a)',
+  'light-dark(#4f8f7d,#6fb3a0)',
+] as const
 const STAGE_PADDING = 32
 
 // Zoom bounds for the pan/zoom stage. Below the floor the labels stop being
@@ -39,6 +45,7 @@ interface TreePosition {
 
 interface TreeLayout {
   readonly positions: readonly TreePosition[]
+  readonly mergeSpines: ReadonlyMap<TurnNodeId, number>
   readonly width: number
   readonly height: number
 }
@@ -230,6 +237,32 @@ function layoutTree(state: GraphState): TreeLayout {
   }
   for (const node of nodes) laneFor(node.id)
 
+  // Reused target columns still need distinct merge spines. Widen only those
+  // gutters, and unusually busy departure rows, instead of stacking tracks.
+  const mergeSlots = new Map<TurnNodeId, number>()
+  const gutterCounts = new Map<number, number>()
+  const departures = new Map<TurnNodeId, number>()
+  for (const node of nodes) {
+    if (node.forkSourceId !== undefined || new Set(node.parentIds).size < 2) continue
+    const lane = lanes.get(node.id) ?? 0
+    const slot = gutterCounts.get(lane) ?? 0
+    mergeSlots.set(node.id, slot)
+    gutterCounts.set(lane, slot + 1)
+    for (const parentId of new Set(node.parentIds)) {
+      departures.set(parentId, (departures.get(parentId) ?? 0) + 1)
+    }
+  }
+  const rowExtras = new Map<number, number>()
+  for (const [nodeId, count] of departures) {
+    const row = rows.get(nodeId) ?? 0
+    rowExtras.set(row, Math.max(rowExtras.get(row) ?? 0,
+      23 + (count - 1) * TRACK_SEPARATION + TRACK_RADIUS - VERTICAL_GAP, 0))
+  }
+  const extraX = (lane: number): number => [...gutterCounts]
+    .reduce((sum, [column, count]) => sum + (column <= lane ? (count - 1) * TRACK_SEPARATION : 0), 0)
+  const extraY = (row: number): number => [...rowExtras]
+    .reduce((sum, [sourceRow, extra]) => sum + (sourceRow < row ? extra : 0), 0)
+
   const positions = nodes
     .map(node => ({ node, row: rows.get(node.id) ?? 0, lane: lanes.get(node.id) ?? 0 }))
     .sort((left, right) => left.row - right.row || left.lane - right.lane
@@ -238,30 +271,53 @@ function layoutTree(state: GraphState): TreeLayout {
       nodeId: node.id,
       row,
       lane,
-      x: STAGE_PADDING + NODE_WIDTH / 2 + lane * LANE_STEP,
-      y: STAGE_PADDING + row * ROW_STEP,
+      x: STAGE_PADDING + NODE_WIDTH / 2 + lane * LANE_STEP + extraX(lane),
+      y: STAGE_PADDING + row * ROW_STEP + extraY(row),
     }))
 
   const maxRow = Math.max(0, ...positions.map(position => position.row))
   const maxLane = Math.max(0, ...positions.map(position => position.lane))
   return {
     positions,
-    width: Math.max(320, STAGE_PADDING * 2 + NODE_WIDTH + maxLane * LANE_STEP),
-    height: STAGE_PADDING * 2 + NODE_HEIGHT + maxRow * ROW_STEP,
+    mergeSpines: new Map(positions.filter(position => mergeSlots.has(position.nodeId))
+      .map(position => [position.nodeId, position.x - NODE_WIDTH / 2 - HORIZONTAL_GAP / 2
+        - mergeSlots.get(position.nodeId)! * TRACK_SEPARATION])),
+    width: Math.max(320, STAGE_PADDING * 2 + NODE_WIDTH + maxLane * LANE_STEP + extraX(maxLane)),
+    height: STAGE_PADDING * 2 + NODE_HEIGHT + maxRow * ROW_STEP + extraY(maxRow),
   }
+}
+
+/** Round orthogonal corners in either direction, including shifted late forks. */
+function roundedTrack(points: readonly (readonly [number, number])[]): string {
+  const first = points[0]!
+  let path = `M ${first[0]} ${first[1]}`
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const before = points[index - 1]!
+    const corner = points[index]!
+    const after = points[index + 1]!
+    const incoming = Math.hypot(corner[0] - before[0], corner[1] - before[1])
+    const outgoing = Math.hypot(after[0] - corner[0], after[1] - corner[1])
+    const radius = Math.min(TRACK_RADIUS, incoming / 2, outgoing / 2)
+    if (radius === 0) continue
+    const entry = [corner[0] - Math.sign(corner[0] - before[0]) * radius,
+      corner[1] - Math.sign(corner[1] - before[1]) * radius]
+    const exit = [corner[0] + Math.sign(after[0] - corner[0]) * radius,
+      corner[1] + Math.sign(after[1] - corner[1]) * radius]
+    path += ` L ${entry[0]} ${entry[1]} Q ${corner[0]} ${corner[1]} ${exit[0]} ${exit[1]}`
+  }
+  const last = points.at(-1)!
+  return `${path} L ${last[0]} ${last[1]}`
 }
 
 function connector(parent: TreePosition, child: TreePosition): string {
   const startY = parent.y + NODE_HEIGHT
-  const endY = child.y
+  if (parent.x === child.x) return `M ${parent.x} ${startY} V ${child.y}`
   const middleY = startY + CONNECTOR_ELBOW
-  return `M ${parent.x} ${startY} V ${middleY} H ${child.x} V ${endY}`
+  return roundedTrack([[parent.x, startY], [parent.x, middleY], [child.x, middleY], [child.x, child.y]])
 }
 
-function mergeConnector(parent: TreePosition, child: TreePosition, parallel: boolean): string {
-  const startX = parent.x + (parallel ? MERGE_PARALLEL_OFFSET : 0)
-  const startY = parent.y + NODE_HEIGHT
-  return `M ${startX} ${startY} V ${startY + CONNECTOR_ELBOW} H ${child.x} V ${child.y}`
+function mergeStyle(index: number): CSSProperties {
+  return { '--dsh-git-track-color': MERGE_COLORS[index % MERGE_COLORS.length] } as CSSProperties
 }
 
 /** Compact tree visualization: node details are intentionally kept out of the graph. */
@@ -310,10 +366,20 @@ function GraphCanvasView({
     }
     return groups
   }, [state, nodes])
-  const parentsWithOrdinaryChildren = useMemo(() => new Set(nodes.flatMap((node) => {
-    const parents = [...new Set(node.parentIds)]
-    return node.forkSourceId === undefined && parents.length === 1 ? parents : []
-  })), [nodes])
+  const merges = useMemo(() => nodes.filter(node =>
+    node.forkSourceId === undefined && new Set(node.parentIds).size >= 2), [nodes])
+  const mergeIndex = useMemo(() => new Map(merges.map((node, index) => [node.id, index])), [merges])
+  const mergeSources = useMemo(() => new Set(merges.flatMap(node => node.parentIds)), [merges])
+  // Each source fans out in merge order. Shared sources keep one departure dot.
+  const sourceTargets = useMemo(() => {
+    const targets = new Map<TurnNodeId, TurnNodeId[]>()
+    for (const merge of merges) {
+      for (const source of new Set(merge.parentIds)) {
+        targets.set(source, [...(targets.get(source) ?? []), merge.id])
+      }
+    }
+    return targets
+  }, [merges])
   const selectedNodes = useMemo(() => new Set(selectedNodeIds ?? []), [selectedNodeIds])
   const anchoredNodes = useMemo(() => new Set(anchoredNodeIds ?? []), [anchoredNodeIds])
   const selectionMode = selectedNodeIds !== undefined || candidateNodeId !== undefined
@@ -450,7 +516,15 @@ function GraphCanvasView({
 
   const zoomAtCenter = (factor: number): void => zoomBy(factor, viewport.width / 2, viewport.height / 2)
 
-  return <div
+  return <div className="dsh-git-tree-panel">
+    <div className="dsh-git-tree-legend" aria-label={localized('图例', 'Graph legend', locale)}>
+      {merges.map((node, index) => <span key={node.id} style={mergeStyle(index)} data-merge-legend={node.id}>
+        <i />{labels.get(node.id) ?? 'PA'}
+      </span>)}
+      <span className="dsh-git-tree-legend-lineage"><i />{localized('血缘', 'Lineage', locale)}</span>
+      <span className="dsh-git-tree-legend-count">{localized(`${merges.length} 个 merge`, `${merges.length} merges`, locale)}</span>
+    </div>
+    <div
     ref={viewportRef}
     className={`dsh-git-tree-viewport ${panning ? 'dsh-git-tree-viewport-panning' : ''}`}
     onPointerDown={startPan}
@@ -470,24 +544,47 @@ function GraphCanvasView({
       >
       <svg className="dsh-git-tree-svg" width={layout.width} height={layout.height} aria-hidden="true">
         {nodes.flatMap((node) => {
-          if (node.forkSourceId !== undefined) return []
-          const parentIds = [...new Set(node.parentIds)]
-          const merge = parentIds.length >= 2
-          return parentIds.map((parentId) => {
+          if (node.forkSourceId !== undefined || mergeIndex.has(node.id)) return []
+          return [...new Set(node.parentIds)].map((parentId) => {
             const parent = byId.get(parentId)
             const child = byId.get(node.id)
             if (parent === undefined || child === undefined) return null
-            return <path
-              key={`${parentId}:${node.id}`}
-              d={merge
-                ? mergeConnector(parent, child, parentsWithOrdinaryChildren.has(parentId))
-                : connector(parent, child)}
-              className={`dsh-git-tree-edge ${merge ? 'dsh-git-tree-edge-merge' : ''}`}
-              data-edge-kind={merge ? 'merge' : 'lineage'}
-              data-parent-id={parentId}
-              data-child-id={node.id}
-            />
+            return <path key={`${parentId}:${node.id}`} d={connector(parent, child)}
+              className="dsh-git-tree-edge" data-edge-kind="lineage"
+              data-parent-id={parentId} data-child-id={node.id} />
           })
+        })}
+        {merges.map((node, index) => {
+          const child = byId.get(node.id)
+          if (child === undefined) return null
+          const targetX = child.x - NODE_WIDTH / 2
+          const targetY = child.y + NODE_HEIGHT / 2
+          const spineX = layout.mergeSpines.get(node.id)!
+          const sources = [...new Set(node.parentIds)].flatMap(parentId => {
+            const parent = byId.get(parentId)
+            if (parent === undefined) return []
+            const slot = sourceTargets.get(parentId)?.indexOf(node.id) ?? 0
+            const bendY = parent.y + NODE_HEIGHT + 23 + slot * TRACK_SEPARATION
+            return [{ parent, bendY }]
+          })
+          if (sources.length === 0) return null
+          const spineStart = Math.min(...sources.map(source => source.bendY + TRACK_RADIUS))
+          return <g key={node.id} style={mergeStyle(index)} data-merge-id={node.id}>
+            {sources.map(({ parent, bendY }) => {
+              const direction = Math.sign(spineX - parent.x)
+              return <path key={parent.nodeId}
+                d={`M ${parent.x} ${parent.y + NODE_HEIGHT} V ${bendY - TRACK_RADIUS} Q ${parent.x} ${bendY} ${parent.x + direction * TRACK_RADIUS} ${bendY} H ${spineX - direction * TRACK_RADIUS} Q ${spineX} ${bendY} ${spineX} ${bendY + TRACK_RADIUS}`}
+                className="dsh-git-tree-edge dsh-git-tree-edge-merge"
+                data-edge-kind="merge" data-parent-id={parent.nodeId} data-child-id={node.id} />
+            })}
+            <path d={`M ${spineX} ${spineStart} V ${targetY - TRACK_RADIUS} Q ${spineX} ${targetY} ${spineX + TRACK_RADIUS} ${targetY} H ${targetX}`}
+              className="dsh-git-tree-edge dsh-git-tree-edge-merge" data-merge-spine={node.id} />
+          </g>
+        })}
+        {[...mergeSources].map(nodeId => {
+          const source = byId.get(nodeId)
+          return source === undefined ? null : <circle key={nodeId} cx={source.x}
+            cy={source.y + NODE_HEIGHT} r={4} className="dsh-git-tree-merge-source" data-merge-source={nodeId} />
         })}
         {[...forkIdentityGroups].flatMap(([identityRoot, memberIds]) => {
           const members = memberIds
@@ -496,8 +593,8 @@ function GraphCanvasView({
             .sort((left, right) => left.x - right.x)
           return members.slice(1).map((right, index) => {
             const left = members[index]!
-            const startX = left.x + NODE_WIDTH / 2
-            const endX = right.x - NODE_WIDTH / 2
+            const startX = left.x + NODE_WIDTH / 2 + 3
+            const endX = right.x - NODE_WIDTH / 2 - 3
             const middleY = left.y + NODE_HEIGHT / 2
             const muted = previewRelated !== null && !previewRelated.has(identityRoot)
             return <g
@@ -508,8 +605,8 @@ function GraphCanvasView({
               data-fork-copy-id={right.nodeId}
             >
               <path d={`M ${startX} ${middleY} H ${endX}`} />
-              <path d={`M ${startX + 4} ${middleY - 3.5} L ${startX} ${middleY} L ${startX + 4} ${middleY + 3.5}`} />
-              <path d={`M ${endX - 4} ${middleY - 3.5} L ${endX} ${middleY} L ${endX - 4} ${middleY + 3.5}`} />
+              <circle cx={startX} cy={middleY} r={3} />
+              <circle cx={endX} cy={middleY} r={3} />
             </g>
           })
         })}
@@ -537,6 +634,7 @@ function GraphCanvasView({
           disabled={disabled}
           className={`dsh-git-tree-node ${isPreview ? 'dsh-git-tree-node-preview' : ''} ${isDimmed ? 'dsh-git-tree-node-dim' : ''} ${isSelected ? 'dsh-git-tree-node-selected' : ''} ${isCandidate ? 'dsh-git-tree-node-candidate' : ''}`}
           style={{
+            ...(mergeIndex.has(node.id) ? mergeStyle(mergeIndex.get(node.id)!) : {}),
             left: position.x - NODE_WIDTH / 2,
             top: position.y,
             width: NODE_WIDTH,
@@ -555,6 +653,9 @@ function GraphCanvasView({
           data-anchor-state={isAnchored ? 'anchored' : undefined}
           onClick={() => onPreview(node.id)}
         >
+          {mergeParentCount < 2 || !node.parentIds.some(id => byId.has(id)) ? null : <svg
+            className="dsh-git-tree-merge-target" width="10" height="10" aria-hidden="true"
+            data-merge-target={node.id}><circle cx="5" cy="5" r="4.5" /></svg>}
           <span className="dsh-git-tree-node-label">{visibleLabel}</span>
           {node.forkSourceId === undefined ? null : <span className="dsh-git-tree-relation-tag">FORK</span>}
           {mergeParentCount < 2 ? null : <span className="dsh-git-tree-relation-tag">MERGE·{mergeParentCount}</span>}
@@ -582,6 +683,7 @@ function GraphCanvasView({
         disabled={transform.scale >= MAX_SCALE - 0.001}
         onClick={() => zoomAtCenter(ZOOM_STEP)}
       >+</button>
+    </div>
     </div>
   </div>
 }

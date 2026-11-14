@@ -17,9 +17,10 @@ export interface GraphTransport {
 }
 
 function normalize(state: unknown): GraphState {
-  if (state === null || typeof state !== 'object') return EMPTY_GRAPH_STATE
+  if (state === null) return EMPTY_GRAPH_STATE
+  if (typeof state !== 'object') throw new Error('Invalid graph ledger')
   const candidate = state as Partial<GraphState>
-  if (candidate.format !== 1) return EMPTY_GRAPH_STATE
+  if (candidate.format !== 1) throw new Error('Unsupported graph ledger version')
   return { ...EMPTY_GRAPH_STATE, ...candidate }
 }
 
@@ -32,22 +33,30 @@ function normalize(state: unknown): GraphState {
  * ledger behind the one on screen.
  */
 export function connectionGraphTransport(connection: ProjectConnection): GraphTransport {
+  const revisions = new Map<string, number>()
   const chains = new Map<string, Promise<void>>()
   return {
     async read(scopeId) {
       const result = await connection.rpc.call(PROJECT_GRAPH_RPC_CHANNEL, GRAPH_READ_ENDPOINT, { scopeId })
       if (!result.ok) throw new Error(result.error.message)
-      return normalize(decodeGraphReadResponse(result.value).state)
+      const response = decodeGraphReadResponse(result.value)
+      if (response.scopeId !== scopeId) throw new Error('Graph scope mismatch')
+      const state = normalize(response.state)
+      revisions.set(scopeId, state.revision ?? 0)
+      return state
     },
     write(scopeId, state) {
       const previous = chains.get(scopeId) ?? Promise.resolve()
       const next = previous.then(async () => {
+        const expectedRevision = revisions.get(scopeId)
+        if (expectedRevision === undefined) throw new Error('Read the graph before writing')
         const result = await connection.rpc.call(
           PROJECT_GRAPH_RPC_CHANNEL,
           GRAPH_WRITE_ENDPOINT,
-          { scopeId, state },
+          { scopeId, state, expectedRevision },
         )
         if (!result.ok) throw new Error(result.error.message)
+        revisions.set(scopeId, expectedRevision + 1)
       })
       // Keep the chain alive past a rejected write so one failure cannot wedge
       // the scope; the caller still receives the rejection it asked for.

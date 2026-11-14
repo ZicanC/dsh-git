@@ -126,7 +126,9 @@ export function ProjectGraphPage({
                 <section className="dsh-git-message"><span className="dsh-git-message-label">ANSWER</span><PreviewMarkdown text={inspected.answer || localized('（没有文字回答）', '(No text answer)', locale)} /></section>
                 <section className="dsh-git-context-history">
                   <span className="dsh-git-message-label">CONTEXT</span>
-                  {inspected.contextManifest.length === 0
+                  {inspected.contextKnown === false
+                    ? <span className="dsh-git-muted">{localized('实际请求 Context 未知。', 'Actual request Context is unknown.', locale)}</span>
+                    : inspected.contextManifest.length === 0
                     ? <span className="dsh-git-muted">{localized('没有前置 Context', 'No preceding Context', locale)}</span>
                     : <ol>{inspected.contextManifest.map(id => <li key={id}>{labels.get(id) ?? id}</li>)}</ol>}
                 </section>

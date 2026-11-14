@@ -151,7 +151,7 @@ merge 真实节点  → max(parent.rowOrdinal) + 1
 
 因此，兄弟分叉同行；一条 branch 继续向下才增加一行。记录成为 `final` 时冻结 `rowOrdinal`，后来新增后代不会把旧节点换行。
 
-盒子的 x 使用**每行独立**的 `displaySlotOrdinal`。布局器按全局 `(provisionalOrdinal, ledgerOrdinal, occurrenceOrdinal, occurrenceId)` 事件顺序处理 final 出现位置；每一行维护自己的已占槽。无冲突时使用以下期望槽：
+盒子的 x 使用**每行独立**的 `displaySlotOrdinal`。布局器按 Host 持久化的拓扑定稿事件序号 `finalOrdinal` 处理 final 出现位置（包括 fork 副本）。`provisionalOrdinal` 只用于等待区及可定稿记录的破平局；迟到依赖补齐后，在现有定稿事件之后追加，不插回到达时的位置。这样父端点先于孩子定位，补齐普通记录也不会重排已有行内槽。每一行维护自己的已占槽。无冲突时使用以下期望槽：
 
 ```
 根节点                    → 开当前行最右侧新槽

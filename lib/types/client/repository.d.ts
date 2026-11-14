@@ -16,6 +16,10 @@ export declare class GraphRepository {
     private state;
     private readonly listeners;
     private hydrated;
+    private hydration;
+    private writeError;
+    private writeGeneration;
+    get persistenceError(): Error | null;
     private deferred;
     /**
      * @param transport - Host ledger access; omitted keeps an in-memory repository
@@ -33,9 +37,8 @@ export declare class GraphRepository {
     /**
      * Load this scope's stored ledger once, then release any deferred mutations.
      *
-     * A failed read still opens the gate: the graph rebuilds itself from the
-     * session logs the browser is already displaying, which is a better outcome
-     * than a permanently frozen tab.
+     * Failed reads keep the gate closed. A later retry hydrates the stored graph
+     * before replaying deferred observations, so a transient outage cannot erase it.
      */
     hydrate(): Promise<void>;
     /** Apply one mutation now, or hold it until the Host ledger has landed. */

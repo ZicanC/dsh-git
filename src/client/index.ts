@@ -29,7 +29,7 @@ import { GraphView, type GraphViewInjected } from './GraphView.tsx'
 import { ComposerBlockLease } from './composer-block-lease.ts'
 import { ContextTrayChannels } from './context-tray-channel.ts'
 import { connectionGraphTransport } from './graph-transport.ts'
-import { lineageParentPlan, normalizeContextOccurrences } from './graph.ts'
+import { contextReferences, resolveContextReferences, lineageParentPlan, normalizeContextOccurrences } from './graph.ts'
 import { installLocaleSource, localized } from './i18n.ts'
 import { nodeLabelMap } from './labels.ts'
 import { installProjectBridge } from './project-bridge.tsx'
@@ -308,12 +308,14 @@ export function apply(ctx: Context): void {
       return {
         tray: contextTrays.forSession(String(sessionId)),
         hooks: { graph: repository },
+        persistenceError: () => repository.persistenceError?.message ?? null,
         syncTurns: turns => {
           repository.syncSession(sessionId, turns)
           repository.reconcileOfficialForks(sessionParents())
         },
         adoptObservedGraph: state => repository.adoptObservedGraph(state),
         loadProjectGraph: async (signal) => {
+          await repository.hydrate()
           const owner = workspace()
           if (owner === undefined) return null
           const result = await ctx.connection.rpc.call(
@@ -445,12 +447,15 @@ export function apply(ctx: Context): void {
             ))
           }
           const state = repository.getSnapshot()
-          const contextManifest = normalizeContextOccurrences(state, manifest)
+          if (manifest.some(id => state.nodes[id] === undefined)) throw new Error('A selected PA is no longer available')
+          if (!repository.ready || repository.persistenceError !== null) throw new Error('Graph is not saved. Reload the page before creating a Session.')
+          const contextRefs = draft.contextRefs ?? contextReferences(state, manifest)
+          const contextManifest = resolveContextReferences(state, contextRefs)
           const selected = contextManifest.flatMap(nodeId => state.nodes[nodeId] === undefined ? [] : [state.nodes[nodeId]!])
           if (selected.length !== contextManifest.length || selected.length === 0) {
             throw new Error(localized('至少一个所选 PA 已失效，请重新选择。', 'At least one selected PA is stale; select the context again.'))
           }
-          const parents = lineageParentPlan(state, contextManifest)
+          const parents = lineageParentPlan(state, contextManifest, contextRefs)
           const sourceBinding = sessions.binding(sessionId)
           if (sourceBinding === undefined) {
             throw new Error(localized('无法访问当前 Chat 的输入草稿。', 'Cannot access the current Chat draft.'))
@@ -462,7 +467,8 @@ export function apply(ctx: Context): void {
             CREATE_MERGED_SESSION_RPC_ENDPOINT,
             {
               targetSessionId: childSessionId,
-              sources: selected.map(node => ({
+              sources: selected.map((node, index) => ({
+                viaSessionId: contextRefs[index]!.viaSessionId,
                 sourceSessionId: node.sessionId,
                 sourceTurn: node.turn,
                 sourceBoundarySeq: node.boundarySeq,
@@ -486,6 +492,7 @@ export function apply(ctx: Context): void {
           repository.prepareMergedSession({
             childSessionId,
             importedNodeIds: contextManifest,
+            contextRefs,
             parentIds: parents.parentIds,
             primaryParentId: parents.primaryParentId,
             contextManifest,

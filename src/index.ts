@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, rmdir, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import type {} from './connection-contract.ts'
+import { finalizeGraph } from './graph-ledger.ts'
 import { GRAPH_DOMAIN, assertScopeId, graphStateSchema } from './graph-domain.ts'
 import { buildMergedSessionSeed } from './history.ts'
 import { projectHistoryPreview } from './history-preview.ts'
@@ -208,7 +209,7 @@ export async function createMergedSession(
     snapshots.set(sessionId, snapshot)
     return snapshot
   }
-  const primarySessionId = SessionId(request.sources.at(-1)!.sourceSessionId)
+  const primarySessionId = SessionId(request.sources.at(-1)!.viaSessionId ?? request.sources.at(-1)!.sourceSessionId)
   const primary = await readSession(primarySessionId)
   const seed = await buildMergedSessionSeed(targetSessionId, request.sources, readSession)
   signal.throwIfAborted()
@@ -274,7 +275,7 @@ export async function createAnchoredSession(
     snapshots.set(sessionId, snapshot)
     return snapshot
   }
-  const primarySessionId = SessionId(request.sources.at(-1)!.sourceSessionId)
+  const primarySessionId = SessionId(request.sources.at(-1)!.viaSessionId ?? request.sources.at(-1)!.sourceSessionId)
   const primary = await readSession(primarySessionId)
   const seed = await buildMergedSessionSeed(targetSessionId, request.sources, readSession)
   signal.throwIfAborted()
@@ -412,6 +413,7 @@ export async function apply(ctx: Context): Promise<void> {
   await repairWorkspaceMembership(ctx)
   const domain = await ctx.storageDomain.open(GRAPH_DOMAIN)
   const scopes = domain.table('scopes')
+  const graphWrites = new Map<string, Promise<unknown>>()
   ctx.effect(() => () => domain.close(), 'dsh-git: graph ledger domain')
 
   /** Project selected completed turns exactly as the merged seed will copy them. */
@@ -462,7 +464,17 @@ export async function apply(ctx: Context): Promise<void> {
           const scopeId = assertScopeId(request.scopeId)
           // Parse before `put` so a malformed ledger is rejected at the seam,
           // not by the domain's own boundary check after the call is in flight.
-          await scopes.put(scopeId, graphStateSchema.parse(request.state))
+          const write = (graphWrites.get(scopeId) ?? Promise.resolve()).then(async () => {
+            const current = scopes.get(scopeId)
+            if ((current?.revision ?? 0) !== request.expectedRevision) {
+              throw new Error('Graph changed in another client. Reload before saving; the stored graph was preserved.')
+            }
+            const parsed = graphStateSchema.parse(request.state)
+            const next = finalizeGraph({ ...parsed, revision: request.expectedRevision + 1 })
+            await scopes.put(scopeId, graphStateSchema.parse(next))
+          })
+          graphWrites.set(scopeId, write.catch(() => undefined))
+          await write
           return { ok: true, value: { scopeId } }
         }
         default:

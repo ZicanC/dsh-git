@@ -50,7 +50,9 @@ export function PAContextWindow({
       <h3>{node.prompt || localized('（无文字问题）', '(No text prompt)', locale)}</h3>
       <section className="dsh-git-context-history" aria-label={localized('回答时使用的 Context', 'Context used for this answer', locale)}>
         <span className="dsh-git-message-label">{localized('回答时使用的 CONTEXT', 'CONTEXT USED FOR THIS ANSWER', locale)}</span>
-        {node.contextManifest.length === 0
+        {node.contextKnown === false
+          ? <div className="dsh-git-muted">{localized('实际请求 Context 未知。', 'Actual request Context is unknown.', locale)}</div>
+          : node.contextManifest.length === 0
           ? <div className="dsh-git-muted">{localized('该节点没有前置 Context。', 'This node has no preceding Context.', locale)}</div>
           : <ol>{node.contextManifest.map(contextId => {
             const context = state.nodes[contextId]

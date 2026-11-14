@@ -156,6 +156,26 @@ function renderGraphView(fixture: GraphViewFixture) {
 }
 
 describe('graph UI', () => {
+  it('keeps shared history selected through the current fork Session when submitting Fork', async () => {
+    const original = node({ id: 'shared-original', sessionId: 'source', turn: 1, createdAt: 1 })
+    const sourceTip = node({ id: 'shared-tip', sessionId: 'source', turn: 2, createdAt: 2,
+      primaryParentId: original.id, parentIds: [original.id] })
+    const fork = node({ ...sourceTip, id: 'shared-fork', sessionId: 'session-a', createdAt: 3,
+      primaryParentId: null, parentIds: [], forkSourceId: sourceTip.id })
+    const child = node({ id: 'shared-child', sessionId: 'session-a', turn: 3, createdAt: 4,
+      primaryParentId: fork.id, parentIds: [fork.id] })
+    const forkState = graph([original, sourceTip, fork, child], { sessionTurnRefs: {
+      source: { 1: original.id, 2: sourceTip.id }, 'session-a': { 1: original.id, 2: fork.id, 3: child.id },
+    } })
+    const fixture = graphViewFixture(forkState)
+    renderGraphView(fixture)
+    await vi.waitFor(() => expect(screen.getByRole('button', { name: 'Fork' })).toBeDefined())
+    fireEvent.click(screen.getByRole('button', { name: 'Fork' }))
+    await vi.waitFor(() => expect(fixture.createMergedSession).toHaveBeenCalledTimes(1))
+    const draft = fixture.createMergedSession.mock.calls[0]![1] as { contextRefs: { viaSessionId: string }[] }
+    expect(draft.contextRefs.map(ref => ref.viaSessionId)).toEqual(['session-a', 'session-a', 'session-a'])
+  })
+
   const one = node({
     id: 'pa-11111920b5', prompt: 'Question one', createdAt: 1,
     turn: 1, boundarySeq: 5,
@@ -475,7 +495,7 @@ describe('graph UI', () => {
 
     await vi.waitFor(() => expect(fixture.createMergedSession).toHaveBeenCalledWith(
       [one.id, two.id, three.id],
-      { text: 'carry this official draft', draftRevision: 0, imageIds: [], hasStructuredReferences: false },
+      expect.objectContaining({ text: 'carry this official draft', draftRevision: 0, imageIds: [], hasStructuredReferences: false }),
       expect.any(AbortSignal),
     ))
     expect(fixture.submit).not.toHaveBeenCalled()

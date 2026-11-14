@@ -8,16 +8,17 @@ export function nodeLabelMap(state: GraphState): ReadonlyMap<TurnNodeId, string>
   const ordinary = nodes.filter(candidate => candidate.forkSourceId === undefined)
   const reserved = new Set<number>()
   for (const node of ordinary) {
-    if (node.displayLabel === undefined) continue
-    labels.set(node.id, node.displayLabel)
-    const match = /^PA([1-9]\d*)(?: fork)?$/.exec(node.displayLabel)
+    if (node.displayLabel === undefined && node.ledgerOrdinal === undefined) continue
+    labels.set(node.id, node.displayLabel ?? `PA${node.ledgerOrdinal}`)
+    if (node.ledgerOrdinal !== undefined) reserved.add(node.ledgerOrdinal)
+    const match = /^PA([1-9]\d*)(?: fork)?$/.exec(node.displayLabel ?? '')
     if (match !== null) reserved.add(Number(match[1]))
   }
   let next = reserved.size === 0 ? 1 : Math.max(...reserved) + 1
   for (const node of ordinary) {
     if (labels.has(node.id)) continue
     while (reserved.has(next)) next += 1
-    labels.set(node.id, `PA${next}`)
+    labels.set(node.id, `PA${node.ledgerOrdinal ?? next}`)
     reserved.add(next)
     next += 1
   }

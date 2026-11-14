@@ -17,6 +17,7 @@ import { type SessionEvent } from '@deepseek-ai/dsh-session';
 import type { HistoryTurnSource } from './protocol.ts';
 /** Where one turn of a merged Session was copied from. */
 export interface MergeLineageSource {
+    readonly viaSessionId?: string;
     readonly sourceSessionId: string;
     readonly sourceTurn: number;
     readonly sourceBoundarySeq: number;

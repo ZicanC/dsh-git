@@ -38,6 +38,27 @@ function turnEndSeq(events: readonly SessionEvent[]): number {
 }
 
 describe('Host-side merged history', () => {
+  it('validates shared-history selection paths and rejects selecting the same PA through two Sessions', async () => {
+    const original = completedTurn('original', 'P1', 'A1')
+    const events = [...original.snapshotEvents()]
+    const source = { sourceSessionId: 'original', sourceTurn: 1, sourceBoundarySeq: turnEndSeq(events) }
+    const snapshots = new Map([
+      ['original', { session: original.header, inheritedEventCount: 0, events }],
+      ['fork', { session: { ...original.header, id: SessionId('fork'), parentSession: original.id }, inheritedEventCount: events.length, events }],
+      ['empty', { session: { ...original.header, id: SessionId('empty') }, inheritedEventCount: 0, events: [] }],
+    ])
+    const read = async (id: string) => snapshots.get(id)!
+    const seed = await buildMergedSessionSeed('child', [{ ...source, viaSessionId: 'fork' }], read)
+    const lineage = readMergeLineage(seed)!
+    expect(lineage.sources[0]!.viaSessionId).toBe('fork')
+    const decoded = decodeProjectGraphResponse({ workspaceId: 'w', sessions: [{
+      sessionId: 'child', createdAt: 1, seedLength: seed.length, turns: [], mergeSources: lineage.sources,
+    }] })
+    expect(decoded.sessions[0]!.mergeSources![0]!.viaSessionId).toBe('fork')
+    await expect(buildMergedSessionSeed('invalid', [{ ...source, viaSessionId: 'empty' }], read)).rejects.toThrow(/history member/)
+    await expect(buildMergedSessionSeed('duplicate', [source, { ...source, sourceSessionId: 'fork' }], read)).rejects.toThrow(/Duplicate/)
+  })
+
   it('materializes PA1 and PA7 as Turns 1 and 2 so the next request is Turn 3', async () => {
     const pa1 = completedTurn('source-pa1', 'P1', 'A1')
     const pa7 = completedTurn('source-pa7', 'P7', 'A7')

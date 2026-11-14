@@ -1,11 +1,37 @@
 import type {
   GraphEdge, GraphLayout, GraphPosition, GraphState, TurnNode, TurnNodeId,
 } from './types.ts'
+import type { ContextRef } from '../graph-state.ts'
+import { identityOf } from '../graph-ledger.ts'
+
+/** Freeze the history path independently from the physical node's owner. */
+export function contextReferences(
+  state: GraphState, manifest: readonly TurnNodeId[], via: Readonly<Record<string, string>> = {},
+): readonly ContextRef[] {
+  return manifest.map(id => {
+    const node = state.nodes[id]
+    if (node === undefined) throw new Error(`Missing selected PA: ${id}`)
+    return { paId: identityOf(state, id), viaSessionId: via[id] ?? node.sessionId }
+  })
+}
+
+export function resolveContextReferences(state: GraphState, refs: readonly ContextRef[]): readonly TurnNodeId[] {
+  const identities = new Set<string>()
+  return refs.map(ref => {
+    if (identities.has(ref.paId)) throw new Error('Duplicate Context PA identity')
+    identities.add(ref.paId)
+    const matches = Object.values(state.sessionTurnRefs[ref.viaSessionId] ?? {})
+      .filter(id => state.nodes[id] !== undefined && identityOf(state, id) === ref.paId)
+    if (matches.length !== 1) throw new Error(`Invalid Context history reference: ${ref.viaSessionId}`)
+    return matches[0]!
+  })
+}
 
 /** Return nodes in stable creation order with ids breaking timestamp ties. */
 export function orderedNodes(state: GraphState): readonly TurnNode[] {
   return Object.values(state.nodes).sort((left, right) =>
-    left.createdAt - right.createdAt || left.id.localeCompare(right.id))
+    (left.finalOrdinal ?? Number.MAX_SAFE_INTEGER) - (right.finalOrdinal ?? Number.MAX_SAFE_INTEGER)
+    || left.createdAt - right.createdAt || left.id.localeCompare(right.id))
 }
 
 /** Return the primary-parent ancestry from root through the addressed node. */
@@ -44,7 +70,8 @@ export function missingDirectDependencies(
  * trimmed or reordered — branches that lineage: that is a Fork. Only PAs
  * pulled from a second Session make the new Chat a Merge.
  */
-export function joinsLineages(state: GraphState, manifest: readonly TurnNodeId[]): boolean {
+export function joinsLineages(state: GraphState, manifest: readonly TurnNodeId[], refs?: readonly ContextRef[]): boolean {
+  if (refs !== undefined) return new Set(refs.map(ref => ref.viaSessionId)).size > 1
   const sessions = new Set(normalizeContextOccurrences(state, manifest).flatMap((id) => {
     const node = state.nodes[id]
     return node === undefined ? [] : [node.sessionId]
@@ -105,11 +132,13 @@ export interface LineageParentPlan {
 export function lineageParentPlan(
   state: GraphState,
   manifest: readonly TurnNodeId[],
+  refs?: readonly ContextRef[],
 ): LineageParentPlan {
   const terminalBySession = new Map<string, { readonly nodeId: TurnNodeId, readonly index: number }>()
-  normalizeContextOccurrences(state, manifest).forEach((nodeId, index) => {
+  const occurrences = refs === undefined ? normalizeContextOccurrences(state, manifest) : resolveContextReferences(state, refs)
+  occurrences.forEach((nodeId, index) => {
     const node = state.nodes[nodeId]
-    if (node !== undefined) terminalBySession.set(node.sessionId, { nodeId, index })
+    if (node !== undefined) terminalBySession.set(refs?.[index]?.viaSessionId ?? node.sessionId, { nodeId, index })
   })
   const parentIds = [...terminalBySession.values()]
     .sort((left, right) => left.index - right.index)

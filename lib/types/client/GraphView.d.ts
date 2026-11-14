@@ -11,6 +11,7 @@ export interface ProjectGraphLoad {
     readonly sessionTitles: Readonly<Record<string, string>>;
 }
 export interface MergeDraftTransfer {
+    readonly contextRefs?: readonly import('../graph-state.ts').ContextRef[];
     readonly text: string;
     readonly draftRevision: number;
     readonly imageIds: readonly DraftAttachmentId[];
@@ -18,6 +19,7 @@ export interface MergeDraftTransfer {
 }
 /** Browser callbacks and observables supplied from the plugin apply closure. */
 export interface GraphViewInjected {
+    readonly persistenceError?: () => string | null;
     /** Session-local bridge to the official composer input dock. */
     readonly tray: ContextTrayChannel;
     readonly hooks: {
@@ -35,4 +37,4 @@ export interface GraphViewInjected {
     readonly createMergedSession: (manifest: readonly TurnNodeId[], draft: MergeDraftTransfer, signal: AbortSignal) => Promise<void>;
 }
 /** Complete Branches workbench: graph selection, read-only history, and Merge. */
-export declare function GraphView({ sessionId, useChat, useInput, inputActions, useGraph, syncTurns, adoptObservedGraph, loadProjectGraph, loadHistoryPreview, loadPreviewImage, tray, setComposerBlocked, activateAnchor, cancelAnchor, createMergedSession, }: ConvViewProps & InjectFace<GraphViewInjected>): import("react").JSX.Element;
+export declare function GraphView({ sessionId, useChat, useInput, inputActions, useGraph, syncTurns, adoptObservedGraph, loadProjectGraph, loadHistoryPreview, loadPreviewImage, tray, setComposerBlocked, activateAnchor, cancelAnchor, createMergedSession, persistenceError, }: ConvViewProps & InjectFace<GraphViewInjected>): import("react").JSX.Element;

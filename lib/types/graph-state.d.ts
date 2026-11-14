@@ -9,9 +9,21 @@
 export type TurnNodeId = string;
 /** Stable id of one visual branch. */
 export type BranchId = string;
+/** A PA identity selected along one Session history. */
+export interface ContextRef {
+    readonly paId: string;
+    readonly viaSessionId: string;
+}
 /** One immutable Prompt + Answer commit in the conversation DAG. */
 export interface TurnNode {
     readonly id: TurnNodeId;
+    readonly paId?: string | undefined;
+    readonly ledgerOrdinal?: number | undefined;
+    /** Topological finalization event, including fork occurrences. */
+    readonly finalOrdinal?: number | undefined;
+    readonly contextRefs?: readonly ContextRef[] | undefined;
+    /** False means the actual request Context could not be recovered. */
+    readonly contextKnown?: boolean | undefined;
     /** Durable label retained when an Anchor Workspace imports a source PA. */
     readonly displayLabel?: string | undefined;
     readonly sessionId: string;
@@ -38,6 +50,7 @@ export interface ConversationBranch {
 }
 /** Pending merge metadata retained until the child session completes its first new turn. */
 export interface PendingMerge {
+    readonly contextRefs?: readonly ContextRef[] | undefined;
     readonly branchId: BranchId;
     readonly parentIds: readonly TurnNodeId[];
     readonly primaryParentId: TurnNodeId | null;
@@ -65,6 +78,9 @@ export interface AnchorModeState {
  */
 export interface GraphState {
     readonly format: 1;
+    readonly revision?: number | undefined;
+    readonly ledgerSequence?: number | undefined;
+    readonly finalSequence?: number | undefined;
     readonly nodes: Readonly<Record<TurnNodeId, TurnNode>>;
     readonly branches: Readonly<Record<BranchId, ConversationBranch>>;
     readonly sessionBranches: Readonly<Record<string, BranchId>>;

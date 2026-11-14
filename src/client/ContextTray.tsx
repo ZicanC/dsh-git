@@ -6,6 +6,7 @@ import type { GraphState, TurnNodeId } from './types.ts'
 
 /** Presentation props for the ordered, page-local merge selection. */
 export interface ContextTrayProps {
+  readonly contextRefs?: readonly import('../graph-state.ts').ContextRef[]
   readonly state: GraphState
   readonly selectedIds: readonly TurnNodeId[]
   /** Merge order as previewed: the selection with the candidate at its place. */
@@ -31,7 +32,7 @@ export interface ContextTrayProps {
 /** Draggable ordered PA selection. The resident DSH composer remains below it. */
 export function ContextTray({
   state, selectedIds, orderedIds, candidateId, busy, anchored = false, anchorWorkspaceTitle,
-  error, dirty, overLimit,
+  error, dirty, overLimit, contextRefs,
   onMove, onMoveEnd, onRemove, onMerge,
 }: ContextTrayProps) {
   const locale = useLocale()
@@ -44,7 +45,7 @@ export function ContextTray({
   // A selection that stays inside one Session branches it; only PAs from a
   // second Session make the new Chat a Merge. The preview counts, so the
   // action names what it would become.
-  const action = joinsLineages(state, orderedIds) ? 'Merge' : 'Fork'
+  const action = joinsLineages(state, orderedIds, contextRefs) ? 'Merge' : 'Fork'
   const canMerge = !anchored && !busy && !overLimit && selectedIds.length > 0 && candidateId === null
   const forcedExpanded = dirty || candidateId !== null || error !== null
   const expanded = forcedExpanded || expandedByUser

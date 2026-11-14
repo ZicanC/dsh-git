@@ -18,6 +18,7 @@ import type { HistoryTurnSource } from './protocol.ts'
 
 /** Where one turn of a merged Session was copied from. */
 export interface MergeLineageSource {
+  readonly viaSessionId?: string
   readonly sourceSessionId: string
   readonly sourceTurn: number
   readonly sourceBoundarySeq: number
@@ -55,6 +56,7 @@ export function mergeLineageEvent(
 ): SessionEvent<'dsh-git/merge'> {
   const lineage: MergeLineage = {
     sources: sources.map((source, index) => ({
+      ...(source.viaSessionId === undefined ? {} : { viaSessionId: source.viaSessionId }),
       sourceSessionId: source.sourceSessionId,
       sourceTurn: source.sourceTurn,
       sourceBoundarySeq: source.sourceBoundarySeq,

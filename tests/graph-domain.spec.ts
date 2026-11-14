@@ -1,3 +1,4 @@
+import { node } from './fixtures.ts'
 import { describe, expect, it } from 'vitest'
 import { GRAPH_DOMAIN, MAX_SCOPE_ID_LENGTH, assertScopeId, graphStateSchema } from '../src/graph-domain.ts'
 import {
@@ -44,6 +45,7 @@ describe('graph domain', () => {
   it('still accepts a format-1 pending merge written by the old ask flow', () => {
     const legacy = {
       ...EMPTY_GRAPH_STATE,
+      nodes: { 'pa-1': node({ id: 'pa-1' }) },
       pendingMerges: {
         child: {
           branchId: 'branch-1',

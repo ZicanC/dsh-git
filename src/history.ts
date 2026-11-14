@@ -1,6 +1,8 @@
 import { Session, SessionId, SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { SessionLogSnapshot } from '@deepseek-ai/dsh-session-query'
 import { mergeLineageEvent } from './merge-lineage.ts'
+import { readMergeLineage } from './merge-lineage.ts'
+import { projectTurns } from './project-history.ts'
 import type { HistoryTurnSource } from './protocol.ts'
 
 const COPIED_EVENT_TYPES = new Set([
@@ -126,6 +128,44 @@ export async function buildMergedSessionSeed(
   sources: readonly HistoryTurnSource[],
   readSession: (sessionId: ReturnType<typeof SessionId>) => Promise<SessionLogSnapshot>,
 ): Promise<readonly SessionEvent[]> {
+  // Validate identity and history membership before creating any target state.
+  // Copied prefixes and composed seeds use exact log provenance, never text equality.
+  const identities = new Map<string, Promise<string>>()
+  const resolve = async (source: HistoryTurnSource, visiting = new Set<string>()): Promise<string> => {
+    const key = JSON.stringify([source.sourceSessionId, source.sourceTurn, source.sourceBoundarySeq])
+    if (visiting.has(key)) throw new Error('Cyclic Session provenance')
+    const cached = identities.get(key)
+    if (cached !== undefined) return cached
+    const next = new Set(visiting).add(key)
+    const pending = (async () => {
+      const snapshot = await readSession(SessionId(source.sourceSessionId))
+      sourceTurnEvents(snapshot, source)
+      const merged = readMergeLineage(snapshot.events)?.sources.find(item => item.targetTurn === source.sourceTurn)
+      if (merged !== undefined) return resolve(merged, next)
+      if (snapshot.session.parentSession !== undefined
+        && source.sourceBoundarySeq < (snapshot.inheritedEventCount ?? 0)) {
+        return resolve({ ...source, sourceSessionId: snapshot.session.parentSession }, next)
+      }
+      return key
+    })()
+    identities.set(key, pending)
+    return pending
+  }
+  const selected = new Set<string>()
+  for (const source of sources) {
+    const identity = await resolve(source)
+    if (selected.has(identity)) throw new Error('Duplicate Context PA identity')
+    selected.add(identity)
+    if (source.viaSessionId === undefined || source.viaSessionId === source.sourceSessionId) continue
+    const via = await readSession(SessionId(source.viaSessionId))
+    let matches = 0
+    for (const turn of projectTurns(via)) {
+      const candidate = await resolve({ sourceSessionId: source.viaSessionId,
+        sourceTurn: turn.turn, sourceBoundarySeq: turn.boundarySeq })
+      if (candidate === identity) matches += 1
+    }
+    if (matches !== 1) throw new Error('Context source is not a unique Session history member')
+  }
   const target = Session.create(SessionId(targetSessionId))
   for (const [index, source] of sources.entries()) {
     const snapshot = await readSession(SessionId(source.sourceSessionId))

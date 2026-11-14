@@ -23,7 +23,8 @@ describe('GraphRepository', () => {
     const second = state.nodes[state.sessionTurnRefs.s1![2]!]!
     expect(first.parentIds).toEqual([])
     expect(second.parentIds).toEqual([first.id])
-    expect(second.contextManifest).toEqual([first.id])
+    expect(second.contextManifest).toEqual([])
+    expect(second.contextKnown).toBe(false)
     expect(state.contextManifest).toEqual([first.id, second.id])
     expect(transport.scopes.get('workspace:one')).toEqual(state)
   })
@@ -47,15 +48,16 @@ describe('GraphRepository', () => {
     expect(state.sessionTurnRefs.s1![2]).toBe(stored.sessionTurnRefs.s1![2])
   })
 
-  it('opens the gate and rebuilds from the session log when the Host read fails', async () => {
+  it('keeps writes gated when the Host read fails', async () => {
     const transport = new MemoryTransport()
     transport.read = async () => { throw new Error('connection lost') }
     const repository = new GraphRepository(transport, 'workspace:one')
     repository.syncSession('s1', [turn(1)])
 
     await expect(repository.hydrate()).rejects.toThrow('connection lost')
-    expect(repository.ready).toBe(true)
-    expect(Object.keys(repository.getSnapshot().nodes)).toHaveLength(1)
+    expect(repository.ready).toBe(false)
+    expect(Object.keys(repository.getSnapshot().nodes)).toHaveLength(0)
+    expect(transport.writes).toBe(0)
   })
 
   it('adopts unopened Session turns without replacing local graph identity or view state', () => {
@@ -210,6 +212,7 @@ describe('GraphRepository', () => {
     repository.syncSession('source', [turn(1), turn(2), { ...turn(3, 50), prompt: 'q78', answer: 'a78' }])
     repository.syncSession('child', [turn(1), turn(2), { ...turn(3, 40), prompt: 'q56', answer: 'a56' }])
 
+    const oldLabel = nodeLabelMap(repository.getSnapshot()).get(repository.getSnapshot().sessionTurnRefs.child![3]!)
     repository.reconcileOfficialForks({ child: 'source' })
 
     const state = repository.getSnapshot()
@@ -225,7 +228,7 @@ describe('GraphRepository', () => {
     expect(state.nodes[forkNext]?.parentIds).toEqual([forkTip])
     const labels = nodeLabelMap(state)
     expect(labels.get(forkTip)).toBe('PA2 fork')
-    expect(labels.get(forkNext)).toBe('PA3')
+    expect(labels.get(forkNext)).toBe(oldLabel)
     expect(Object.values(state.nodes).filter(node => node.prompt === 'q1')).toHaveLength(1)
     expect(Object.values(state.nodes).filter(node => node.prompt === 'q2')).toHaveLength(2)
   })

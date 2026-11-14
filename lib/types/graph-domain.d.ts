@@ -9,8 +9,8 @@ export type GraphScopeId = string & {
  * segments, so the cap only bounds what one untrusted call can allocate.
  */
 export declare const MAX_SCOPE_ID_LENGTH = 512;
-/** One scope's complete ledger, as stored and as accepted off the wire. */
-export declare const graphStateSchema: z.ZodType<GraphState>;
+/** Existing format-1 records remain readable; every new write receives semantic validation. */
+export declare const graphStateSchema: z.ZodType<GraphState, unknown, z.core.$ZodTypeInternals<GraphState, unknown>>;
 /**
  * The graph domain. `UNIT_NAME_RE` is `/^[a-z][a-z0-9_]*$/`, so the domain and
  * table names are underscore-separated rather than matching the package name.

@@ -14,7 +14,7 @@ import {
 import type { ContextTrayProps } from './ContextTray.tsx'
 import type { ContextTrayChannel } from './context-tray-channel.ts'
 import { GraphCanvas } from './GraphCanvas.tsx'
-import { paIdentityId } from './graph.ts'
+import { contextReferences, paIdentityId } from './graph.ts'
 import { HistoryRail } from './HistoryRail.tsx'
 import { historyRailModel } from './history-rail.ts'
 import { PAContextWindow } from './PAContextWindow.tsx'
@@ -33,6 +33,7 @@ export interface ProjectGraphLoad {
 }
 
 export interface MergeDraftTransfer {
+  readonly contextRefs?: readonly import('../graph-state.ts').ContextRef[]
   readonly text: string
   readonly draftRevision: number
   readonly imageIds: readonly DraftAttachmentId[]
@@ -41,6 +42,7 @@ export interface MergeDraftTransfer {
 
 /** Browser callbacks and observables supplied from the plugin apply closure. */
 export interface GraphViewInjected {
+  readonly persistenceError?: () => string | null
   /** Session-local bridge to the official composer input dock. */
   readonly tray: ContextTrayChannel
   readonly hooks: { graph: GraphRepository }
@@ -96,7 +98,7 @@ function isAbort(cause: unknown, signal: AbortSignal): boolean {
 export function GraphView({
   sessionId, useChat, useInput, inputActions, useGraph, syncTurns,
   adoptObservedGraph, loadProjectGraph, loadHistoryPreview, loadPreviewImage,
-  tray, setComposerBlocked, activateAnchor, cancelAnchor, createMergedSession,
+  tray, setComposerBlocked, activateAnchor, cancelAnchor, createMergedSession, persistenceError,
 }: ConvViewProps & InjectFace<GraphViewInjected>) {
   const locale = useLocale()
   // Narrow subscriptions: an assistant delta swaps only `partial`, so the
@@ -114,6 +116,7 @@ export function GraphView({
 
   const [project, setProject] = useState<ProjectGraphLoad | null>(null)
   const [projectError, setProjectError] = useState<string | null>(null)
+  const [selectionVia, setSelectionVia] = useState<Record<string, string>>({})
   const [selectedIds, setSelectedIds] = useState<TurnNodeId[]>([])
   const [baselineIds, setBaselineIds] = useState<TurnNodeId[]>([])
   const [selectionTouched, setSelectionTouched] = useState(false)
@@ -185,16 +188,18 @@ export function GraphView({
     setSelectionTouched(true)
   }, [anchor, state.nodes])
 
+  const sourcePathsChanged = baselineIds.some(id => selectionVia[id] !== undefined && selectionVia[id] !== String(sessionId))
+
   // A candidate that was only inspected and then closed is not a lasting edit.
   // Re-arm baseline following so a later official turn joins the blue history.
   useEffect(() => {
-    if (selectionTouched && candidateId === null && sameIds(selectedIds, baselineIds)) {
+    if (selectionTouched && candidateId === null && sameIds(selectedIds, baselineIds) && !sourcePathsChanged) {
       setSelectionTouched(false)
     }
-  }, [selectionTouched, candidateId, selectedIds, baselineIds])
+  }, [selectionTouched, candidateId, selectedIds, baselineIds, sourcePathsChanged])
 
   const labels = useMemo(() => nodeLabelMap(state), [state])
-  const dirty = !anchorActive && (candidateId !== null || !sameIds(selectedIds, baselineIds))
+  const dirty = !anchorActive && (candidateId !== null || !sameIds(selectedIds, baselineIds) || sourcePathsChanged)
   const previewId = candidateId !== null && !selectedIds.includes(candidateId) ? candidateId : null
   const previewIndex = Math.min(Math.max(candidateIndex, 0), selectedIds.length)
   const orderedPreviewIds = useMemo(() => previewId === null
@@ -204,6 +209,10 @@ export function GraphView({
   // Keep the node label currency paired with the exact sources sent to the
   // Host. If a stale graph reference cannot resolve, filtering the pair
   // together prevents every later PA label from shifting by one.
+  const selectionSources = Object.fromEntries(orderedPreviewIds.map(id => [id,
+    selectionVia[id] ?? (currentSessionIds.includes(id) ? String(sessionId) : state.nodes[id]?.sessionId ?? ''),
+  ]))
+  const selectionRefs = contextReferences(state, orderedPreviewIds.filter(id => state.nodes[id] !== undefined), selectionSources)
   const previewEntries = useMemo(() => orderedPreviewIds.flatMap(nodeId => {
     const source = sourceOf(state, nodeId)
     return source === null ? [] : [{ nodeId, source }]
@@ -323,6 +332,7 @@ export function GraphView({
   const addCandidate = (): void => {
     if (busy || anchorBusy || anchorActive) return
     if (inspectedId === null || state.nodes[inspectedId] === undefined) return
+    setSelectionVia(via => ({ ...via, [inspectedId]: state.nodes[inspectedId]!.sessionId }))
     // Inspecting is read-only. Only this explicit action changes Context.
     setSelectedIds((ids) => {
       const identityId = paIdentityId(state, inspectedId)
@@ -371,6 +381,7 @@ export function GraphView({
 
   const discard = (send: boolean): void => {
     const composerAvailable = setComposerBlocked(false)
+    setSelectionVia({})
     setSelectedIds(currentSessionIds)
     setBaselineIds(currentSessionIds)
     setSelectionTouched(false)
@@ -412,6 +423,7 @@ export function GraphView({
         ))
       }
       await createMergedSession(selectedIds, {
+        contextRefs: contextReferences(state, selectedIds, selectionSources),
         text: input.draft,
         draftRevision: input.draftRev,
         imageIds: input.imageIds,
@@ -496,6 +508,7 @@ export function GraphView({
   const draftHasContent = input.draft.trim() !== '' || input.imageIds.length > 0
   const trayModel: ContextTrayProps = {
     state,
+    contextRefs: selectionRefs,
     selectedIds,
     orderedIds: orderedPreviewIds,
     candidateId,
@@ -531,6 +544,9 @@ export function GraphView({
   }, [tray])
 
   return <div className="dsh-git-root" data-conversation-composer-overlay="">
+    {persistenceError?.() ? <div className="dsh-git-error" role="alert">
+      {localized('图账本尚未保存，请重新加载页面：', 'Graph changes are not saved. Reload the page: ', locale)}{persistenceError()}
+    </div> : null}
     <div className={`dsh-git-workbench ${graphOpen ? '' : 'dsh-git-workbench-graph-closed'}`}>
       {graphOpen && <div
         id="dsh-git-conversation-graph"

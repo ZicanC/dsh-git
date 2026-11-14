@@ -1,5 +1,5 @@
 /** Pure assembly of a complete Workspace history into one read-only PA DAG. */
-import { primaryPath } from './graph.ts'
+import { finalizeGraph, identityOf } from '../graph-ledger.ts'
 import { nodeLabelMap } from './labels.ts'
 import type { ConversationBranch, GraphState, TurnNode, TurnNodeId } from './types.ts'
 import {
@@ -280,7 +280,7 @@ export function assembleProjectGraph(
     }))]
     const terminalMergeSourceBySession = new Map<string, MergeLineageSource>()
     for (const source of orderedMergeSources) {
-      terminalMergeSourceBySession.set(source.sourceSessionId, source)
+      terminalMergeSourceBySession.set(source.viaSessionId ?? source.sourceSessionId, source)
     }
     const exactMergeParents = [...new Set([...terminalMergeSourceBySession.values()]
       .sort((left, right) => left.targetTurn - right.targetTurn)
@@ -392,6 +392,7 @@ export function assembleProjectGraph(
               ? localNode.parentIds.filter(parentId => local.nodes[parentId] !== undefined)
               : previousId === null ? [] : [previousId]
         nodes[id] = {
+          ...localNode,
           id,
           ...(displayLabel === undefined ? {} : { displayLabel }),
           sessionId: nodeSessionId,
@@ -410,11 +411,13 @@ export function assembleProjectGraph(
           boundarySeq: externalAnchorSource?.sourceBoundarySeq ?? localNode?.boundarySeq ?? turn.boundarySeq,
           primaryParentId,
           parentIds,
+          contextKnown: isForkMarker ? forkSource?.contextKnown ?? false
+            : isFirstMergedOwnTurn ? true : localNode?.contextKnown ?? false,
           contextManifest: isForkMarker
             ? forkSource?.contextManifest ?? (primaryParentId === null ? [] : [primaryParentId])
             : isFirstMergedOwnTurn
               ? exactMergeContextIds
-              : localNode?.contextManifest ?? (primaryParentId === null ? [] : [primaryParentId]),
+              : localNode?.contextManifest ?? [],
           branchId: localNode?.branchId ?? bid,
         }
       }
@@ -437,6 +440,8 @@ export function assembleProjectGraph(
 
   const provisional: GraphState = {
     format: 1,
+    ledgerSequence: local.ledgerSequence,
+    finalSequence: local.finalSequence,
     nodes,
     branches,
     sessionBranches,
@@ -447,18 +452,42 @@ export function assembleProjectGraph(
     previewNodeId: null,
     contextManifest: [],
   }
-  // Fill the simple fallback context with the complete primary ancestry after every node exists.
-  for (const [id, node] of Object.entries(nodes)) {
-    if (local.nodes[id] !== undefined || exactMergeRelationIds.has(id)) continue
-    nodes[id] = { ...node, contextManifest: primaryPath(provisional, node.primaryParentId) }
+  // Context is request provenance, never reconstructed from the visible parent chain.
+  // Resolve copies after all originals exist (sessions can arrive out of order).
+  const copyContext = (id: string, seen = new Set<string>()): void => {
+    const node = nodes[id]
+    if (node?.forkSourceId === undefined || seen.has(id)) return
+    seen.add(id)
+    copyContext(node.forkSourceId, seen)
+    const source = nodes[node.forkSourceId]
+    if (source !== undefined) nodes[id] = { ...node,
+      contextManifest: source.contextManifest,
+      contextKnown: source.contextKnown ?? false,
+      contextRefs: source.contextRefs,
+    }
   }
+  for (const session of sessions) {
+    const own = session.turns.find(turn => !turn.inherited)
+    const ownId = own === undefined ? undefined : sessionTurnRefs[session.sessionId]?.[own.turn]
+    if (ownId === undefined || !exactMergeRelationIds.has(ownId)) continue
+    const sources = [...(session.mergeSources ?? [])].sort((a, b) => a.targetTurn - b.targetTurn)
+    // Outside-scope Anchor sources retain their existing read-only coordinates.
+    if (sources.some(source => sessionTurnRefs[source.viaSessionId ?? source.sourceSessionId] === undefined)) continue
+    nodes[ownId] = { ...nodes[ownId]!, contextRefs: sources.map(source => ({
+      paId: identityOf(provisional, canonical.get(addressKey(session.sessionId, source.targetTurn))!),
+      viaSessionId: source.viaSessionId ?? source.sourceSessionId,
+    })) }
+  }
+  for (const id of Object.keys(nodes)) copyContext(id)
+  const finalized = finalizeGraph(provisional)
+  for (const [id, node] of Object.entries(finalized.nodes)) nodes[id] = { ...nodes[id]!, ...node }
   const timeline = Object.values(nodes)
     .filter(node => node.forkSourceId === undefined)
-    .sort((left, right) => left.completedAt - right.completedAt || left.id.localeCompare(right.id))
+    .sort((left, right) => left.completedAt - right.completedAt || (left.ledgerOrdinal ?? 0) - (right.ledgerOrdinal ?? 0) || left.id.localeCompare(right.id))
     .map(node => node.id)
   const headNodeId = timeline.at(-1) ?? null
   return {
-    state: { ...provisional, nodes, headNodeId, previewNodeId: headNodeId },
+    state: { ...finalized, nodes, headNodeId, previewNodeId: headNodeId },
     nodes,
     timeline,
     sessionCount: sessions.length,
