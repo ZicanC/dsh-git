@@ -88,6 +88,12 @@ export interface GraphState {
     readonly pendingMerges: Readonly<Record<string, PendingMerge>>;
     /** Active anchor modes, keyed by the source Session that dispatches questions. */
     readonly anchors: Readonly<Record<string, AnchorModeState>>;
+    /**
+     * Legacy view pointers. They stay in format 1 so stored ledgers keep
+     * validating, but nothing updates them: one ledger serves every Chat of a
+     * Workspace, so the head, preview, and tray of whichever Chat is open belong
+     * to the view. A Session's own head is `branches[...].headId`.
+     */
     readonly headNodeId: TurnNodeId | null;
     readonly previewNodeId: TurnNodeId | null;
     readonly contextManifest: readonly TurnNodeId[];

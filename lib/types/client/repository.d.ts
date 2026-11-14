@@ -1,5 +1,5 @@
 import type { GraphTransport } from './graph-transport.ts';
-import type { AnchorModeState, BranchId, GraphState, ImportedTurn, PrepareMergedSessionInput, TurnNodeId } from './types.ts';
+import type { AnchorModeState, GraphState, ImportedTurn, PrepareMergedSessionInput } from './types.ts';
 /**
  * Observable owning one scope's conversation DAG, durable on the Host.
  *
@@ -44,8 +44,15 @@ export declare class GraphRepository {
     /** Apply one mutation now, or hold it until the Host ledger has landed. */
     private run;
     private commit;
-    /** Import completed turns from the currently viewed DSH session. */
-    syncSession(sessionId: string, turns: readonly ImportedTurn[]): void;
+    /**
+     * Import completed turns from the currently viewed DSH session.
+     *
+     * `parents` maps each official Harness fork to the Session it was forked
+     * from. The import and the fork reconciliation land as one commit, so the
+     * prefix a fork copied from its parent is recognised before it is numbered:
+     * a copy never spends a PA number of its own.
+     */
+    syncSession(sessionId: string, turns: readonly ImportedTurn[], parents?: Readonly<Record<string, string>>): void;
     /**
      * Adopt a complete Host-observed Workspace graph without replacing local
      * branch names, pending merge metadata, or transient view state.
@@ -55,29 +62,12 @@ export declare class GraphRepository {
      * to a later merged child without duplicating them in the ledger.
      */
     adoptObservedGraph(observed: GraphState): void;
-    private syncSessionNow;
     /** Collapse browser-imported copies from ordinary Host forks into one labeled fork point. */
     reconcileOfficialForks(parents: Readonly<Record<string, string>>): void;
-    private reconcileOfficialForksNow;
     /** Register a merged child Session before its first new official turn. */
     prepareMergedSession(input: PrepareMergedSessionInput): void;
-    private prepareMergedSessionNow;
-    /** Remove pending metadata for an abandoned merged Session. */
-    abortPending(sessionId: string): void;
     /** Freeze one source Session's selected context into an Anchor Workspace. */
     activateAnchor(sessionId: string, anchor: AnchorModeState): void;
     /** Leave anchor mode after the Host has cleaned up any unused Workspace. */
     cancelAnchor(sessionId: string): void;
-    /** Toggle one node in the context tray; additions restore creation-time order. */
-    toggleContext(nodeId: TurnNodeId): void;
-    /** Remove all nodes from the next-request tray. */
-    clearContext(): void;
-    /** Move one selected node before another selected node. */
-    moveContext(nodeId: TurnNodeId, beforeId: TurnNodeId): void;
-    /** Move one selected node to the end of the tray. */
-    moveContextToEnd(nodeId: TurnNodeId): void;
-    /** Change only the preview selection. */
-    preview(nodeId: TurnNodeId): void;
-    /** Rename a branch in the graph ledger. */
-    renameBranch(branchId: BranchId, name: string): void;
 }

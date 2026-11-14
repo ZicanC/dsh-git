@@ -445,8 +445,15 @@ export function apply(ctx: Context): void {
             ))
           }
           const state = repository.getSnapshot()
-          if (manifest.some(id => state.nodes[id] === undefined)) throw new Error('A selected PA is no longer available')
-          if (!repository.ready || repository.persistenceError !== null) throw new Error('Graph is not saved. Reload the page before creating a Session.')
+          if (manifest.some(id => state.nodes[id] === undefined)) {
+            throw new Error(localized('至少一个所选 PA 已失效，请重新选择。', 'At least one selected PA is stale; select the context again.'))
+          }
+          if (!repository.ready || repository.persistenceError !== null) {
+            throw new Error(localized(
+              '图账本尚未保存；请重新加载页面后再创建新 Chat。',
+              'The graph is not saved. Reload the page before creating a new Chat.',
+            ))
+          }
           const contextRefs = draft.contextRefs ?? contextReferences(state, manifest)
           const contextManifest = resolveContextReferences(state, contextRefs)
           const selected = contextManifest.flatMap(nodeId => state.nodes[nodeId] === undefined ? [] : [state.nodes[nodeId]!])

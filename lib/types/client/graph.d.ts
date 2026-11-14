@@ -1,14 +1,10 @@
-import type { GraphLayout, GraphState, TurnNode, TurnNodeId } from './types.ts';
+import type { GraphState, TurnNode, TurnNodeId } from './types.ts';
 import type { ContextRef } from '../graph-state.ts';
 /** Freeze the history path independently from the physical node's owner. */
 export declare function contextReferences(state: GraphState, manifest: readonly TurnNodeId[], via?: Readonly<Record<string, string>>): readonly ContextRef[];
 export declare function resolveContextReferences(state: GraphState, refs: readonly ContextRef[]): readonly TurnNodeId[];
 /** Return nodes in stable creation order with ids breaking timestamp ties. */
 export declare function orderedNodes(state: GraphState): readonly TurnNode[];
-/** Return the primary-parent ancestry from root through the addressed node. */
-export declare function primaryPath(state: GraphState, nodeId: TurnNodeId | null): readonly TurnNodeId[];
-/** Return selected nodes whose primary parent is absent from the selection. */
-export declare function missingDirectDependencies(state: GraphState, manifest: readonly TurnNodeId[]): readonly TurnNodeId[];
 /**
  * Whether a selection joins lineages rather than continuing one.
  *
@@ -39,7 +35,5 @@ export interface LineageParentPlan {
  * surviving endpoint is therefore also the layout-primary parent.
  */
 export declare function lineageParentPlan(state: GraphState, manifest: readonly TurnNodeId[], refs?: readonly ContextRef[]): LineageParentPlan;
-/** Assign stable lanes and parent edges for a compact GitLens-style graph. */
-export declare function layoutGraph(state: GraphState): GraphLayout;
 /** Estimate prompt tokens without coupling the browser plugin to a tokenizer. */
 export declare function estimateTokens(state: GraphState, manifest: readonly TurnNodeId[]): number;
