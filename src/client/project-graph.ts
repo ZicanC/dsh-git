@@ -169,6 +169,21 @@ export function assembleProjectGraph(
     .map((session, index) => [session.sessionId, index + 1]))
   const resolving = new Set<string>()
   const ordinaryForkTips = new Map<string, number>()
+  const forkOccurrenceIds = new Set<TurnNodeId>()
+  /**
+   * The fork occurrence at a Session's copied tip. The live ledger may already
+   * hold it under its own id; reusing that id keeps the assembled graph and the
+   * ledger naming one occurrence, never two.
+   */
+  const forkOccurrenceId = (sessionId: string, turn: number): TurnNodeId => {
+    const localId = local.sessionTurnRefs[sessionId]?.[turn]
+    const localNode = localId === undefined ? undefined : local.nodes[localId]
+    const id = localNode !== undefined && localNode.sessionId === sessionId && localNode.forkSourceId !== undefined
+      ? localNode.id
+      : forkNodeId(sessionId, turn)
+    forkOccurrenceIds.add(id)
+    return id
+  }
 
   for (const session of sessions) {
     // A dsh-git merge has exact per-turn provenance. Its parentSession is only
@@ -233,7 +248,7 @@ export function assembleProjectGraph(
         const parentId = resolveCanonical(parent, parentTurn)
         resolving.delete(key)
         const id = ordinaryForkTips.get(session.sessionId) === turn.turn
-          ? forkNodeId(session.sessionId, turn.turn)
+          ? forkOccurrenceId(session.sessionId, turn.turn)
           : parentId
         canonical.set(key, id)
         return id
@@ -361,7 +376,7 @@ export function assembleProjectGraph(
           ?? (anchorSessionOrdinal === undefined || turn.inherited
             ? localNode?.displayLabel
             : `S${anchorSessionOrdinal}.${ownTurnIndex}`)
-        const isForkMarker = isComposedForkMarker || id === forkNodeId(sid, turn.turn)
+        const isForkMarker = isComposedForkMarker || forkOccurrenceIds.has(id)
         const parentSession = session.parentSessionId === undefined ? undefined : sessionsById.get(session.parentSessionId)
         const parentTurn = isForkMarker
           ? parentSession?.turns.find(candidate => candidate.turn === turn.turn && candidate.fingerprint === turn.fingerprint)

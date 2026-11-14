@@ -309,10 +309,8 @@ export function apply(ctx: Context): void {
         tray: contextTrays.forSession(String(sessionId)),
         hooks: { graph: repository },
         persistenceError: () => repository.persistenceError?.message ?? null,
-        syncTurns: turns => {
-          repository.syncSession(sessionId, turns)
-          repository.reconcileOfficialForks(sessionParents())
-        },
+        // One commit: a fork's copied prefix is recognised before it is numbered.
+        syncTurns: turns => { repository.syncSession(sessionId, turns, sessionParents()) },
         adoptObservedGraph: state => repository.adoptObservedGraph(state),
         loadProjectGraph: async (signal) => {
           await repository.hydrate()
