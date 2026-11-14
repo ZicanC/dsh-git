@@ -116,6 +116,7 @@ export function GraphView({
 
   const [project, setProject] = useState<ProjectGraphLoad | null>(null)
   const [projectError, setProjectError] = useState<string | null>(null)
+  const [projectSettled, setProjectSettled] = useState(false)
   const [selectionVia, setSelectionVia] = useState<Record<string, string>>({})
   const [selectedIds, setSelectedIds] = useState<TurnNodeId[]>([])
   const [baselineIds, setBaselineIds] = useState<TurnNodeId[]>([])
@@ -146,16 +147,17 @@ export function GraphView({
   useEffect(() => () => { anchorAbortRef.current?.abort() }, [])
   useEffect(() => () => { previewAbortRef.current?.abort() }, [])
 
-  useEffect(() => { syncTurns(turns) }, [turnSignature, syncTurns])
-
   useEffect(() => {
     const controller = new AbortController()
     setProjectError(null)
     void loadProjectGraph(controller.signal).then((loaded) => {
-      if (!controller.signal.aborted) setProject(loaded)
+      if (controller.signal.aborted) return
+      setProject(loaded)
+      setProjectSettled(true)
     }).catch((cause: unknown) => {
       if (controller.signal.aborted) return
       setProjectError(cause instanceof Error ? cause.message : String(cause))
+      setProjectSettled(true)
     })
     return () => controller.abort()
   }, [sessionId, loadProjectGraph])
@@ -170,6 +172,15 @@ export function GraphView({
   useEffect(() => {
     if (projectModel !== null) adoptObservedGraph(projectModel.state)
   }, [projectModel, adoptObservedGraph])
+
+  // Declared after the adoption above, and held until the first Workspace
+  // read has settled: the Workspace graph knows which of this Chat's turns
+  // were copied from another Session, so adopting it first keeps those copies
+  // from being numbered as PAs of their own. A failed or absent Workspace
+  // read settles too, and the turns are then imported on their own.
+  useEffect(() => {
+    if (projectSettled) syncTurns(turns)
+  }, [turnSignature, syncTurns, projectSettled])
 
   const currentSessionIds = useMemo(() => sessionHistory(state, String(sessionId)), [state, sessionId])
   const currentSessionKey = currentSessionIds.join('\u0000')

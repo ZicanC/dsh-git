@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, rmdir, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import type {} from './connection-contract.ts'
+import { forkOrigin } from './fork-origin.ts'
 import { finalizeGraph } from './graph-ledger.ts'
 import { GRAPH_DOMAIN, assertScopeId, graphStateSchema } from './graph-domain.ts'
 import { buildMergedSessionSeed } from './history.ts'
@@ -186,7 +187,35 @@ function failure(error: unknown): { ok: false; error: { code: string; message: s
   }
 }
 
+/** The Session a composed child is created under: the one its last source was selected through. */
+function primarySourceSessionId(sources: readonly HistoryTurnSource[]): ReturnType<typeof SessionId> {
+  const last = sources.at(-1)!
+  return SessionId(last.viaSessionId ?? last.sourceSessionId)
+}
+
 type SessionSnapshot = Awaited<ReturnType<Context['sessionQuery']['readSession']>>
+
+/**
+ * Read every Session of a Workspace that can be read.
+ *
+ * One log Harness refuses to load must not hide the rest of the Workspace, so
+ * a failed read is logged and that Session is left out.
+ */
+async function readWorkspaceSessions(
+  ctx: Context,
+  workspace: Workspace,
+  read: (sessionId: ReturnType<typeof SessionId>) => Promise<SessionSnapshot>,
+): Promise<SessionSnapshot[]> {
+  const snapshots = await Promise.all(workspace.sessionIds.map(async (sessionId) => {
+    try {
+      return await read(SessionId(sessionId))
+    } catch (error: unknown) {
+      ctx.logger.warn(`failed to read Session "${sessionId}" of Workspace "${workspace.id}": ${String(error)}`)
+      return undefined
+    }
+  }))
+  return snapshots.flatMap(snapshot => snapshot === undefined ? [] : [snapshot])
+}
 
 /**
  * Compose the selected turns into a seed and create the child Agent from it.
@@ -213,9 +242,19 @@ async function createComposedAgent(
     snapshots.set(sessionId, snapshot)
     return snapshot
   }
-  const primarySessionId = SessionId(sources.at(-1)!.viaSessionId ?? sources.at(-1)!.sourceSessionId)
+  // An official fork's origin is looked for among the Sessions it shares a
+  // Workspace with, and only when a selected turn lies in an inherited prefix.
+  const forkOriginOf = async (fork: SessionSnapshot): Promise<string | undefined> => {
+    const workspace = ctx.workspaceRegistry.list()
+      .find(candidate => candidate.sessionIds.includes(fork.session.id))
+    if (workspace === undefined) return undefined
+    const siblings = await readWorkspaceSessions(ctx, workspace, readSession)
+    signal.throwIfAborted()
+    return forkOrigin(fork, siblings)
+  }
+  const primarySessionId = primarySourceSessionId(sources)
   const primary = await readSession(primarySessionId)
-  const seed = await buildMergedSessionSeed(targetSessionId, sources, readSession)
+  const seed = await buildMergedSessionSeed(targetSessionId, sources, readSession, forkOriginOf)
   signal.throwIfAborted()
   const preset = resolveSessionPreset(primary.session, primary.events)
   const cwd = cwdOf(primary)
@@ -269,7 +308,7 @@ export async function createMergedSession(
   const handle = await createComposedAgent(
     ctx, targetSessionId, request.sources, signal, primary => primary.session.cwd,
   )
-  const primarySessionId = SessionId(request.sources.at(-1)!.viaSessionId ?? request.sources.at(-1)!.sourceSessionId)
+  const primarySessionId = primarySourceSessionId(request.sources)
   const sourceWorkspace = ctx.workspaceRegistry.list()
     .find(workspace => workspace.sessionIds.includes(primarySessionId))
   if (sourceWorkspace !== undefined) await attachOrDispose(sourceWorkspace, handle, targetSessionId)
@@ -402,8 +441,10 @@ export async function readProjectGraph(
   if (workspace === undefined) throw new Error(`workspace "${request.workspaceId}" was not found`)
   // Anchor children only belong to their dedicated Workspace. Include them
   // here; Workspace membership, rather than an ID-prefix filter, isolates them.
-  const sessions = await Promise.all(workspace.sessionIds.map(async sessionId =>
-    projectSession(await ctx.sessionQuery.readSession(SessionId(sessionId)))))
+  const snapshots = await readWorkspaceSessions(
+    ctx, workspace, sessionId => ctx.sessionQuery.readSession(sessionId),
+  )
+  const sessions = snapshots.map(snapshot => projectSession(snapshot, forkOrigin(snapshot, snapshots)))
   sessions.sort((left, right) => left.createdAt - right.createdAt
     || left.sessionId.localeCompare(right.sessionId))
   return { ok: true, value: { workspaceId: request.workspaceId, sessions } }

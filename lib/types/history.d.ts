@@ -34,6 +34,8 @@ export declare function appendHistoricalTurn(target: Session, sourceEvents: read
  * The seed closes with the log-only `dsh-git/merge` lineage event, appended
  * directly rather than through `Session.append` because only a seed event may
  * carry `ignorable` (see `./merge-lineage.ts`).
+ * @param forkOriginOf - the Session an official fork was taken from, for a
+ *   fork whose header records no parent (see `./fork-origin.ts`).
  */
-export declare function buildMergedSessionSeed(targetSessionId: string, sources: readonly HistoryTurnSource[], readSession: (sessionId: ReturnType<typeof SessionId>) => Promise<SessionLogSnapshot>): Promise<readonly SessionEvent[]>;
+export declare function buildMergedSessionSeed(targetSessionId: string, sources: readonly HistoryTurnSource[], readSession: (sessionId: ReturnType<typeof SessionId>) => Promise<SessionLogSnapshot>, forkOriginOf?: (snapshot: SessionLogSnapshot) => Promise<string | undefined>): Promise<readonly SessionEvent[]>;
 export {};

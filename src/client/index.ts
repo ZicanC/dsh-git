@@ -213,6 +213,9 @@ export function apply(ctx: Context): void {
     connectionGraphTransport(ctx.connection),
   )
   const contextTrays = new ContextTrayChannels()
+  // Official forks and the Session each was taken from, as the Host last
+  // reported them. The browser's session list no longer carries this.
+  const forkOrigins = new Map<string, string>()
   const anchorDispatches = new Map<string, AbortController>()
   ctx.effect(() => () => {
     for (const controller of anchorDispatches.values()) controller.abort()
@@ -419,11 +422,11 @@ export function apply(ctx: Context): void {
       )
       const workspace = () => ctx.workspaces.list.getSnapshot().items
         .find(candidate => candidate.sessionIds.some((id: string) => String(id) === String(sessionId)))
-      const sessionParents = (): Record<string, string> => Object.fromEntries(
-        Object.values(sessions.list.getSnapshot().byId).flatMap(item => item.parentId === undefined
-          ? []
-          : [[String(item.id), String(item.parentId)]]),
-      )
+      const sessionParents = (): Record<string, string> => ({
+        ...Object.fromEntries(forkOrigins),
+        ...Object.fromEntries(Object.values(sessions.list.getSnapshot().byId).flatMap(item =>
+          item.parentId === undefined ? [] : [[String(item.id), String(item.parentId)]])),
+      })
       repository.reconcileOfficialForks(sessionParents())
 
       return {
@@ -447,6 +450,12 @@ export function apply(ctx: Context): void {
           const response = decodeProjectGraphResponse(result.value)
           if (response.workspaceId !== owner.workspaceId) {
             throw new Error(localized('Host 返回了错误的 Workspace graph。', 'The Host returned a graph for the wrong Workspace.'))
+          }
+          for (const item of response.sessions) {
+            // A composed Session's parent is only the Session it was created under.
+            if (item.mergeSources !== undefined) continue
+            if (item.parentSessionId === undefined) forkOrigins.delete(item.sessionId)
+            else forkOrigins.set(item.sessionId, item.parentSessionId)
           }
           const sourceIds = new Set(response.sessions.flatMap(item =>
             item.mergeSources?.flatMap(source => source.sourceLabel === undefined

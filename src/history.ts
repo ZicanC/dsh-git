@@ -224,11 +224,14 @@ export function appendHistoricalTurn(
  * The seed closes with the log-only `dsh-git/merge` lineage event, appended
  * directly rather than through `Session.append` because only a seed event may
  * carry `ignorable` (see `./merge-lineage.ts`).
+ * @param forkOriginOf - the Session an official fork was taken from, for a
+ *   fork whose header records no parent (see `./fork-origin.ts`).
  */
 export async function buildMergedSessionSeed(
   targetSessionId: string,
   sources: readonly HistoryTurnSource[],
   readSession: (sessionId: ReturnType<typeof SessionId>) => Promise<SessionLogSnapshot>,
+  forkOriginOf: (snapshot: SessionLogSnapshot) => Promise<string | undefined> = async () => undefined,
 ): Promise<readonly SessionEvent[]> {
   // Validate identity and history membership before creating any target state.
   // Copied prefixes and composed seeds use exact log provenance, never text equality.
@@ -244,9 +247,10 @@ export async function buildMergedSessionSeed(
       sourceTurnEvents(snapshot, source)
       const merged = readMergeLineage(snapshot.events)?.sources.find(item => item.targetTurn === source.sourceTurn)
       if (merged !== undefined) return resolve(merged, next)
-      if (snapshot.session.parentSession !== undefined
-        && source.sourceBoundarySeq < (snapshot.inheritedEventCount ?? 0)) {
-        return resolve({ ...source, sourceSessionId: snapshot.session.parentSession }, next)
+      if (source.sourceBoundarySeq < (snapshot.inheritedEventCount ?? 0)) {
+        // An inherited turn is the origin's PA, under the same turn and seq.
+        const origin = snapshot.session.parentSession ?? await forkOriginOf(snapshot)
+        if (origin !== undefined) return resolve({ ...source, sourceSessionId: origin }, next)
       }
       return key
     })()

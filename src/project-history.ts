@@ -70,13 +70,18 @@ export function projectTurns(snapshot: SessionLogSnapshot): readonly ProjectTurn
   return turns.sort((left, right) => left.turn - right.turn)
 }
 
-/** Convert one complete Session snapshot into the project graph wire record. */
-export function projectSession(snapshot: SessionLogSnapshot): ProjectSessionDTO {
+/**
+ * Convert one complete Session snapshot into the project graph wire record.
+ * @param origin - the Session an official fork was taken from, when the header
+ *   does not record it (see `./fork-origin.ts`).
+ */
+export function projectSession(snapshot: SessionLogSnapshot, origin?: string): ProjectSessionDTO {
   const lineage = readMergeLineage(snapshot.events)
+  const parentSessionId = snapshot.session.parentSession ?? origin
   return {
     sessionId: snapshot.session.id,
     createdAt: snapshot.session.createdAt,
-    ...(snapshot.session.parentSession === undefined ? {} : { parentSessionId: snapshot.session.parentSession }),
+    ...(parentSessionId === undefined ? {} : { parentSessionId }),
     seedLength: snapshot.inheritedEventCount ?? 0,
     ...(lineage === undefined ? {} : { mergeSources: lineage.sources }),
     turns: projectTurns(snapshot),
