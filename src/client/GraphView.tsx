@@ -1,6 +1,5 @@
 import type {} from '@deepseek-ai/dsh-client-ui-chat/client'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { DraftAttachmentId } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { IconPanelLeftOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace } from '@deepseek-ai/dsh-client-ui-slots'
@@ -14,7 +13,7 @@ import {
 import type { ContextTrayProps } from './ContextTray.tsx'
 import type { ContextTrayChannel } from './context-tray-channel.ts'
 import { GraphCanvas } from './GraphCanvas.tsx'
-import { contextReferences, paIdentityId } from './graph.ts'
+import { contextReferences, hostCoordinates, paIdentityId } from './graph.ts'
 import { HistoryRail } from './HistoryRail.tsx'
 import { historyRailModel } from './history-rail.ts'
 import { PAContextWindow } from './PAContextWindow.tsx'
@@ -25,19 +24,12 @@ import { HistoryPreviewCache, previewSourceKey } from './preview-cache.ts'
 import { nodeLabelMap } from './labels.ts'
 import { assembleProjectGraph } from './project-graph.ts'
 import { localized, useLocale } from './i18n.ts'
+import type { MergeDraftTransfer } from './merged-chat.ts'
 import type { AnchorModeState, GraphState, ImportedTurn, TurnNodeId } from './types.ts'
 
 export interface ProjectGraphLoad {
   readonly response: ProjectGraphResponse
   readonly sessionTitles: Readonly<Record<string, string>>
-}
-
-export interface MergeDraftTransfer {
-  readonly contextRefs?: readonly import('../graph-state.ts').ContextRef[]
-  readonly text: string
-  readonly draftRevision: number
-  readonly attachmentIds: readonly DraftAttachmentId[]
-  readonly hasStructuredReferences: boolean
 }
 
 /** Browser callbacks and observables supplied from the plugin apply closure. */
@@ -82,11 +74,7 @@ function sameIds(left: readonly TurnNodeId[], right: readonly TurnNodeId[]): boo
 
 function sourceOf(state: GraphState, nodeId: TurnNodeId): HistoryTurnSource | null {
   const node = state.nodes[nodeId]
-  return node === undefined ? null : {
-    sourceSessionId: node.sessionId,
-    sourceTurn: node.turn,
-    sourceBoundarySeq: node.boundarySeq,
-  }
+  return node === undefined ? null : hostCoordinates(node)
 }
 
 function isAbort(cause: unknown, signal: AbortSignal): boolean {

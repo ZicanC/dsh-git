@@ -5,15 +5,12 @@ import type { IWorkspaces, WorkspaceView } from '@deepseek-ai/dsh-api-workspace-
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { ProjectConnection } from '../connection-contract.ts'
 import type { GraphRepository } from './repository.ts'
-import { assembleProjectGraph, restoreAnchorSourceLabels } from './project-graph.ts'
+import { hostRpc } from './host-rpc.ts'
+import { assembleProjectGraph } from './project-graph.ts'
 import { ProjectGraphPage } from './ProjectGraphPage.tsx'
 import { localized } from './i18n.ts'
 import type { LocaleSource } from './i18n.ts'
-import {
-  PROJECT_GRAPH_RPC_CHANNEL,
-  PROJECT_GRAPH_RPC_ENDPOINT,
-  decodeProjectGraphResponse,
-} from '../protocol.ts'
+import { readWorkspaceGraph, sessionTitles } from './workspace-graph.ts'
 
 const BUTTON_ATTRIBUTE = 'data-dsh-git-project-button'
 const HOST_ATTRIBUTE = 'data-dsh-git-project-host'
@@ -57,16 +54,9 @@ function workspaceRow(workspace: WorkspaceView, used: ReadonlySet<HTMLElement>):
         .some(span => span.textContent?.trim() === workspace.title))
 }
 
-function sessionTitles(sessions: ISessions): Readonly<Record<string, string>> {
-  const snapshot = sessions.list.getSnapshot()
-  return Object.fromEntries(snapshot.ids.flatMap(id => {
-    const summary = snapshot.byId[id]
-    return summary === undefined ? [] : [[id, summary.displayTitle]]
-  }))
-}
-
 /** Install the isolated compatibility layer and return its complete disposer. */
 export function installProjectBridge(services: ProjectBridgeServices): () => void {
+  const rpc = hostRpc(services.connection)
   let active: ActivePage | null = null
 
   const close = (): void => {
@@ -91,29 +81,12 @@ export function installProjectBridge(services: ProjectBridgeServices): () => voi
     active = { container, owner, root }
     const repository = services.repositoryForWorkspace(workspace.workspaceId)
     const load = async (signal: AbortSignal) => {
-      const result = await services.connection.rpc.call(
-        PROJECT_GRAPH_RPC_CHANNEL,
-        PROJECT_GRAPH_RPC_ENDPOINT,
-        { workspaceId: workspace.workspaceId },
-        signal,
+      const response = await readWorkspaceGraph(
+        rpc, services.repositoryForSession, workspace.workspaceId, signal,
       )
-      if (!result.ok) throw new Error(result.error.message)
-      const response = decodeProjectGraphResponse(result.value)
-      if (response.workspaceId !== workspace.workspaceId) throw new Error(localized('Host 返回了错误的 Workspace graph。', 'The Host returned a graph for the wrong Workspace.'))
-      const sourceIds = new Set(response.sessions.flatMap(item =>
-        item.mergeSources?.flatMap(source => source.sourceLabel === undefined
-          ? [source.sourceSessionId]
-          : []) ?? []))
-      const sourceStates = new Map<string, ReturnType<GraphRepository['getSnapshot']>>()
-      for (const sourceSessionId of sourceIds) {
-        const sourceRepository = services.repositoryForSession(sourceSessionId)
-        await sourceRepository.hydrate()
-        sourceStates.set(sourceSessionId, sourceRepository.getSnapshot())
-      }
       await repository.hydrate()
-      const restored = restoreAnchorSourceLabels(response, sourceStates)
-      repository.adoptObservedGraph(assembleProjectGraph(restored, repository.getSnapshot()).state)
-      return restored
+      repository.adoptObservedGraph(assembleProjectGraph(response, repository.getSnapshot()).state)
+      return response
     }
     root.render(<ProjectGraphPage
       workspaceId={workspace.workspaceId}

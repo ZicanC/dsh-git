@@ -1,21 +1,14 @@
-import type { DraftAttachmentId } from '@deepseek-ai/dsh-client-ui-conversation/client';
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client';
 import type { InjectFace } from '@deepseek-ai/dsh-client-ui-slots';
 import type { HistoryPreviewImageAttachment, HistoryPreviewResponse, HistoryTurnSource, ProjectGraphResponse } from '../protocol.ts';
 import { type LoadedPreviewImage } from './ChatHistoryPreview.tsx';
 import type { ContextTrayChannel } from './context-tray-channel.ts';
 import type { GraphRepository } from './repository.ts';
+import type { MergeDraftTransfer } from './merged-chat.ts';
 import type { AnchorModeState, GraphState, ImportedTurn, TurnNodeId } from './types.ts';
 export interface ProjectGraphLoad {
     readonly response: ProjectGraphResponse;
     readonly sessionTitles: Readonly<Record<string, string>>;
-}
-export interface MergeDraftTransfer {
-    readonly contextRefs?: readonly import('../graph-state.ts').ContextRef[];
-    readonly text: string;
-    readonly draftRevision: number;
-    readonly attachmentIds: readonly DraftAttachmentId[];
-    readonly hasStructuredReferences: boolean;
 }
 /** Browser callbacks and observables supplied from the plugin apply closure. */
 export interface GraphViewInjected {

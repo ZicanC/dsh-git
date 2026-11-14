@@ -1,6 +1,26 @@
 import type { GraphState, TurnNode, TurnNodeId } from './types.ts'
 import type { ContextRef } from '../graph-state.ts'
 import { identityOf } from '../graph-ledger.ts'
+import type { HistoryTurnSource } from '../protocol.ts'
+
+/** Where the Host reads a PA from: its Session's log, at the turn's closing boundary. */
+export function hostCoordinates(node: TurnNode): HistoryTurnSource {
+  return {
+    sourceSessionId: node.sessionId,
+    sourceTurn: node.turn,
+    sourceBoundarySeq: node.boundarySeq,
+  }
+}
+
+/**
+ * The PAs behind a selection, in its order.
+ * @returns undefined when the selection is empty or names a PA the ledger no
+ *   longer holds — either way there is nothing safe to send to the Host.
+ */
+export function selectedNodes(state: GraphState, ids: readonly TurnNodeId[]): readonly TurnNode[] | undefined {
+  const nodes = ids.flatMap(id => state.nodes[id] === undefined ? [] : [state.nodes[id]!])
+  return nodes.length === 0 || nodes.length !== ids.length ? undefined : nodes
+}
 
 /** Freeze the history path independently from the physical node's owner. */
 export function contextReferences(

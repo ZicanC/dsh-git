@@ -7,14 +7,13 @@
  */
 import { identityOf, repairOccurrences, replaceNodes } from '../graph-ledger.ts'
 import { normalizeContextOccurrences } from './graph.ts'
+import { randomSuffix } from './ids.ts'
 import type {
   BranchId, GraphState, ImportedTurn, PrepareMergedSessionInput, TurnNode, TurnNodeId,
 } from './types.ts'
 
 function id(prefix: string): string {
-  const suffix = globalThis.crypto?.randomUUID?.()
-    ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
-  return `${prefix}-${suffix}`
+  return `${prefix}-${randomSuffix()}`
 }
 
 function distinct(ids: readonly TurnNodeId[]): readonly TurnNodeId[] {
