@@ -1,9 +1,7 @@
-import type { HistoryPreviewImageAttachment, HistoryPreviewRecord, HistoryPreviewResponse } from '../protocol.ts';
+import type { HistoryPreviewRecord, HistoryPreviewResponse } from '../protocol.ts';
+import { type LoadPreviewImage } from './PreviewRecords.tsx';
 import type { TurnNodeId } from './types.ts';
-export interface LoadedPreviewImage {
-    readonly url: string;
-    readonly release: () => void;
-}
+export type { LoadedPreviewImage } from './PreviewRecords.tsx';
 /** One turn the official Chat is still producing, below the merged sections. */
 export interface LivePreviewTurn {
     readonly key: string;
@@ -25,7 +23,7 @@ export interface ChatHistoryPreviewProps {
     readonly liveTurns?: readonly LivePreviewTurn[];
     readonly loading: boolean;
     readonly error: string | null;
-    readonly loadImage: (sourceSessionId: string, attachment: HistoryPreviewImageAttachment) => Promise<LoadedPreviewImage>;
+    readonly loadImage: LoadPreviewImage;
 }
 /** Read-only, official-style projection of the exact turns a Merge will seed. */
 export declare function ChatHistoryPreview({ response, orderedNodeIds, labels, candidateNodeId, activeNodeId, pendingNodeIds, liveTurns, loading, error, loadImage, }: ChatHistoryPreviewProps): import("react").JSX.Element;
