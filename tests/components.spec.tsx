@@ -67,7 +67,7 @@ interface LiveSession {
 
 function graphViewFixture(
   state: GraphState,
-  input: { draft?: string; imageIds?: readonly string[]; occurrences?: readonly unknown[] } = {},
+  input: { draft?: string; attachmentIds?: readonly string[]; occurrences?: readonly unknown[] } = {},
   session: Partial<LiveSession['snapshot']> = {},
 ) {
   const live: LiveSession = {
@@ -83,7 +83,7 @@ function graphViewFixture(
     draft: input.draft ?? '',
     draftRev: 0,
     phase: 'plain',
-    imageIds: input.imageIds ?? [],
+    attachmentIds: input.attachmentIds ?? [],
     occurrences: input.occurrences ?? [],
   }
   const submit = vi.fn()
@@ -495,7 +495,7 @@ describe('graph UI', () => {
 
     await vi.waitFor(() => expect(fixture.createMergedSession).toHaveBeenCalledWith(
       [one.id, two.id, three.id],
-      expect.objectContaining({ text: 'carry this official draft', draftRevision: 0, imageIds: [], hasStructuredReferences: false }),
+      expect.objectContaining({ text: 'carry this official draft', draftRevision: 0, attachmentIds: [], hasStructuredReferences: false }),
       expect.any(AbortSignal),
     ))
     expect(fixture.submit).not.toHaveBeenCalled()

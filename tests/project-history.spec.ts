@@ -8,7 +8,7 @@ function completed(session: Session, turn: number, prompt: string, answer: strin
   session.append('turn/start', { turn })
   session.append('user/message', createUserMessage({ content: [{ type: 'text', text: prompt }], source: { kind: 'user' } }), { surfaceOp: 'append' })
   session.append('assistant/message', {
-    turn, step: 1,
+    turn, step: 1, stream: [],
     message: createAssistantMessage({ content: [{ type: 'text', text: answer }], source: { provider: 'mock', model: 'mock' } }),
   }, { surfaceOp: 'append' })
   session.append('turn/end', { turn, reason: { kind: 'completed' } })
@@ -19,7 +19,7 @@ describe('project history protocol', () => {
     const source = Session.create(SessionId('source'))
     completed(source, 1, 'P1', 'A1')
     const child = Session.create(SessionId('child'), source.snapshotEvents(), {
-      version: 0, id: SessionId('child'), createdAt: 100,
+      version: source.header.version, id: SessionId('child'), createdAt: 100,
       parentSession: source.id, isSeeded: true,
     }, SessionLogOffset(source.snapshotEvents().length))
     completed(child, 2, 'P2', 'A2')

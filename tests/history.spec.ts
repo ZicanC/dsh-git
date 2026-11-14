@@ -21,6 +21,7 @@ function completedTurn(sessionId: string, question: string, answer: string): Ses
   session.append('assistant/message', {
     turn: 1,
     step: 1,
+    stream: [],
     message: createAssistantMessage({
       content: [{ type: 'text', text: answer }],
       source: { provider: 'mock', model: 'mock' },
@@ -42,6 +43,7 @@ function appendTurn(session: Session, turn: number, question: string, answer: st
   session.append('assistant/message', {
     turn,
     step: 1,
+    stream: [],
     message: createAssistantMessage({
       content: [{ type: 'text', text: answer }],
       source: { provider: 'mock', model: 'mock' },
@@ -58,6 +60,15 @@ function turnEndSeq(events: readonly SessionEvent[]): number {
 }
 
 describe('Host-side merged history', () => {
+  it('reads merge lineage from a log Harness migrated into the plugin namespace', () => {
+    const sources = [{ sourceSessionId: 'original', sourceTurn: 1, sourceBoundarySeq: 5, targetTurn: 1 }]
+    const migrated = [{
+      type: `plugin:${MERGE_LINEAGE_EVENT}`, seq: 0, time: 1, data: { sources }, ignorable: true,
+    }] as unknown as SessionEvent[]
+    expect(readMergeLineage(migrated)?.sources).toEqual(sources)
+    expect(readMergeLineage([])).toBeUndefined()
+  })
+
   it('validates shared-history selection paths and rejects selecting the same PA through two Sessions', async () => {
     const original = completedTurn('original', 'P1', 'A1')
     const events = [...original.snapshotEvents()]

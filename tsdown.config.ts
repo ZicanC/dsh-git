@@ -14,7 +14,7 @@ const CLIENT_EXTERNALS = [
 const HOST_EXTERNALS = [
   '@deepseek-ai/cordis',
   '@deepseek-ai/dsh-agent',
-  '@deepseek-ai/dsh-agent-presets',
+  '@deepseek-ai/dsh-agent-preset-registry',
   '@deepseek-ai/dsh-commands',
   '@deepseek-ai/dsh-session',
   '@deepseek-ai/dsh-session-query',

@@ -30,7 +30,7 @@ function richCompletedTurn(sessionId: string): Session {
   }), { surfaceOp: 'append' })
   session.append('step/start', { turn: 1, step: 1 })
   session.append('request/header', {
-    header: { config: { provider: 'mock', model: 'mock' }, system: 'system prompt' },
+    header: { config: { provider: 'mock', model: 'mock' } },
     reason: 'initial',
   })
   session.append('request/context', {
@@ -39,6 +39,7 @@ function richCompletedTurn(sessionId: string): Session {
   session.append('assistant/message', {
     turn: 1,
     step: 1,
+    stream: [],
     message: createAssistantMessage({
       content: [
         { type: 'reasoning', text: 'check the file' },

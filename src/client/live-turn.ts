@@ -153,7 +153,9 @@ function nodeRecords(node: ConversationNode): readonly HistoryPreviewRecord[] {
         step: node.step,
         messageId: node.messageId === undefined ? `live-assistant:${node.seq}` : String(node.messageId),
         blocks: assistantBlocks(node.blocks),
-        provenance: node.provenance ?? { provider: '', model: '' },
+        provenance: node.providerMetadata === undefined
+          ? { provider: '', model: '' }
+          : { provider: node.providerMetadata.provider, model: node.providerMetadata.model },
       }]
     case 'tool-result': {
       const result: HistoryPreviewRecord = {
@@ -236,7 +238,8 @@ export function projectLiveTurns(
         step: call.step,
         callId: call.callId,
         name: call.name,
-        arguments: call.argsRaw,
+        // A call still being prepared has no complete argument text yet.
+        arguments: call.phase === 'start' ? call.argsRaw : '',
       })
     }
     const partial = source.partial

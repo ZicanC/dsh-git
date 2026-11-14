@@ -4,12 +4,11 @@ import {
 } from 'react'
 import {
   DisclosureRow,
-  IconApiOutline14,
-  IconBrowseOutline16,
-  IconChevronDownOutline14,
-  IconThinkOutline14,
+  IconApiOutlineRegular,
+  IconBrowseOutlineRegular,
+  IconChevronDownOutlineRegular,
+  IconThinkOutlineRegular,
   JsonBlock,
-  MessageText,
   StateDot,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
@@ -178,7 +177,7 @@ function ReasoningRow({ text }: { readonly text: string }) {
   const [open, setOpen] = useState(false)
   return <DisclosureRow
     className="dsh-git-preview-disclosure"
-    icon={<IconThinkOutline14 size={14} />}
+    icon={<IconThinkOutlineRegular size={14} />}
     title="Think"
     open={open}
     expandable
@@ -259,7 +258,7 @@ function UserMessage({
         />)}
       </div>}
       {text === '' && rest.length === 0 ? null : <div className="dsh-git-preview-user-bubble">
-        {text === '' ? null : <MessageText text={text} />}
+        {text === '' ? null : <div className="dsh-git-preview-user-text">{text}</div>}
         {rest.map((block, index) => block.type === 'other'
           ? <JsonBlock key={index} label={block.originalType} payload={block.value} truncatedLabel={total => `… ${total}`} />
           : <pre className="dsh-git-preview-other" key={index}>{json(block as unknown as HistoryPreviewJsonValue)}</pre>)}
@@ -284,7 +283,7 @@ function ContextMessage({
     : localized('上下文注入', 'Context injection', locale)
   return <DisclosureRow
     className="dsh-git-preview-disclosure dsh-git-preview-context"
-    icon={<IconBrowseOutline16 size={14} />}
+    icon={<IconBrowseOutlineRegular size={14} />}
     title={title}
     open={open}
     expandable
@@ -320,7 +319,7 @@ function ToolRow({
   const expandable = call !== undefined || result !== undefined
   return <DisclosureRow
     className="dsh-git-preview-disclosure dsh-git-preview-tool-row"
-    icon={failed ? <StateDot state="error" /> : <IconApiOutline14 size={14} />}
+    icon={failed ? <StateDot state="error" /> : <IconApiOutlineRegular size={14} />}
     title={title}
     open={open}
     expandable={expandable}
@@ -365,7 +364,7 @@ function EventRecord({ record }: {
   const [open, setOpen] = useState(false)
   return <DisclosureRow
     className="dsh-git-preview-disclosure dsh-git-preview-event"
-    icon={<IconApiOutline14 size={14} />}
+    icon={<IconApiOutlineRegular size={14} />}
     title={record.eventType}
     open={open}
     expandable
@@ -642,7 +641,7 @@ export function ChatHistoryPreview({
         aria-label={localized('回到底部', 'Back to bottom', locale)}
         onClick={scrollToBottom}
       >
-        <IconChevronDownOutline14 size={14} />
+        <IconChevronDownOutlineRegular size={14} />
       </button>
     </div>}
   </div>

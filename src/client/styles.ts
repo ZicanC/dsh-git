@@ -228,6 +228,7 @@ export const STYLES = `
 .dsh-git-preview-user-stack{display:flex;flex-direction:column;align-items:flex-end;gap:8px;min-width:0;max-width:min(525px,82%)}
 .dsh-git-preview-user-images{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;max-width:100%}
 .dsh-git-preview-user-bubble{max-width:100%;padding:10px 16px;border-radius:22px;background:var(--dsw-specific-bubble,var(--dsw-alias-button-info-fill));color:var(--dsw-alias-label-primary);font-size:16px;line-height:24px;overflow-wrap:anywhere}
+.dsh-git-preview-user-text{white-space:pre-wrap;word-break:break-word;font-size:inherit;line-height:inherit}
 .dsh-git-preview-assistant{min-width:0;color:var(--dsw-alias-label-primary);font-size:16px;line-height:28px}
 .dsh-git-preview-blocks{min-width:0;display:flex;flex-direction:column}
 .dsh-git-preview-blocks-assistant{gap:16px}

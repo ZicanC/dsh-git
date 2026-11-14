@@ -34,11 +34,12 @@ describe('project sidebar compatibility bridge', () => {
       workspaceId: 'w', path: '/project', title: 'Project', sessionIds: [],
       createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
     }], phase: 'ready' })
-    const sessions = source({ ids: [], byId: {}, current: undefined, phase: 'ready' })
+    const sessions = source({ ids: [], byId: {}, phase: 'ready' })
     const call = vi.fn(async () => ({ ok: true, value: { workspaceId: 'w', sessions: [] } }))
     const dispose = installProjectBridge({
       connection: { rpc: { call } } as never,
-      sessions: { list: sessions, open: vi.fn() } as never,
+      sessions: { list: sessions } as never,
+      openSession: vi.fn(),
       workspaces: { list: workspaces } as never,
       repositoryForWorkspace: () => new GraphRepository(),
       repositoryForSession: () => new GraphRepository(),
@@ -55,5 +56,40 @@ describe('project sidebar compatibility bridge', () => {
     await act(async () => { dispose() })
     expect(document.querySelector('[data-dsh-git-project-button]')).toBeNull()
     expect(document.querySelector('[data-dsh-git-project-host]')).toBeNull()
+  })
+
+  it('finds a Workspace row by its id when the visible label is not the stored title', async () => {
+    // The default Workspace shows dictionary copy; a second row repeats the stored title as plain text.
+    document.body.innerHTML = `
+      <aside>
+        <div role="treeitem" aria-expanded="true" data-row-key="workspace:other"><span>default-workspace</span><span>
+          <button aria-label="Workspace actions"></button>
+          <button aria-label="New Session"></button>
+        </span></div>
+        <div role="treeitem" aria-expanded="true" data-row-key="workspace:w"><span>Default workspace</span><span>
+          <button aria-label="Workspace actions"></button>
+          <button aria-label="New Session"></button>
+        </span></div>
+      </aside>
+      <section id="conversation"><div data-conversation-scroll></div></section>`
+    const workspaces = source({ items: [{
+      workspaceId: 'w', path: '/home/default-workspace', title: 'default-workspace', sessionIds: [],
+      createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+    }], phase: 'ready' })
+    const dispose = installProjectBridge({
+      connection: { rpc: { call: vi.fn() } } as never,
+      sessions: { list: source({ ids: [], byId: {}, phase: 'ready' }) } as never,
+      openSession: vi.fn(),
+      workspaces: { list: workspaces } as never,
+      repositoryForWorkspace: () => new GraphRepository(),
+      repositoryForSession: () => new GraphRepository(),
+      locale: { getSnapshot: () => ({ active: 'zh', revision: 0 }), subscribe: () => () => {} },
+    })
+
+    const buttons = document.querySelectorAll('[data-dsh-git-project-button]')
+    expect(buttons).toHaveLength(1)
+    expect(buttons[0]?.closest('[role="treeitem"]')?.getAttribute('data-row-key')).toBe('workspace:w')
+
+    await act(async () => { dispose() })
   })
 })

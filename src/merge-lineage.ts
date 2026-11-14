@@ -41,6 +41,13 @@ export interface MergeLineage {
 
 export const MERGE_LINEAGE_EVENT = 'dsh-git/merge'
 
+/**
+ * The same event after Harness's format v3 to v4 migration, which moves every
+ * ignorable event it does not know into the `plugin:` namespace. Logs written
+ * on format v4 keep {@link MERGE_LINEAGE_EVENT}; only migrated ones carry this.
+ */
+const MIGRATED_MERGE_LINEAGE_EVENT = `plugin:${MERGE_LINEAGE_EVENT}`
+
 declare module '@deepseek-ai/dsh-session' {
   interface SessionEventMap {
     /** dsh-git merge provenance; log-only, ignorable, written once into the seed. */
@@ -70,7 +77,8 @@ export function mergeLineageEvent(
 /** Recover merge lineage from a Session log, or `undefined` for an ordinary Session. */
 export function readMergeLineage(events: readonly SessionEvent[]): MergeLineage | undefined {
   for (const event of events) {
-    if (event.type !== MERGE_LINEAGE_EVENT) continue
+    const type: string = event.type
+    if (type !== MERGE_LINEAGE_EVENT && type !== MIGRATED_MERGE_LINEAGE_EVENT) continue
     const data = event.data as Partial<MergeLineage>
     if (!Array.isArray(data.sources)) continue
     return { sources: data.sources }

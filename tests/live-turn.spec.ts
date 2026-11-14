@@ -70,7 +70,7 @@ describe('live turn projection', () => {
     const running = projectLiveTurns(live({
       turns: [turnLocation(1, 0)],
       runningCalls: [{
-        callId: 'call-1', name: 'Read', argsRaw: '{"path":"a.ts"}', turn: 1, step: 1,
+        phase: 'start', callId: 'call-1', name: 'Read', argsRaw: '{"path":"a.ts"}', turn: 1, step: 1,
         time: 5, callView: null, subCalls: [],
       }] as unknown as LiveTurnSource['runningCalls'],
     }), 0)

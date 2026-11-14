@@ -22,6 +22,7 @@ function completedTurn(sessionId: string, prompt: string, answer: string): Sessi
   session.append('assistant/message', {
     turn: 1,
     step: 1,
+    stream: [],
     message: createAssistantMessage({
       content: [{ type: 'text', text: answer }],
       source: { provider: 'mock', model: 'mock' },

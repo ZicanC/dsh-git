@@ -2,7 +2,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-chat/client'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { DraftAttachmentId } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import { IconPanelLeftOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconPanelLeftOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace } from '@deepseek-ai/dsh-client-ui-slots'
 import type {
   HistoryPreviewImageAttachment, HistoryPreviewResponse, HistoryTurnSource, ProjectGraphResponse,
@@ -36,7 +36,7 @@ export interface MergeDraftTransfer {
   readonly contextRefs?: readonly import('../graph-state.ts').ContextRef[]
   readonly text: string
   readonly draftRevision: number
-  readonly imageIds: readonly DraftAttachmentId[]
+  readonly attachmentIds: readonly DraftAttachmentId[]
   readonly hasStructuredReferences: boolean
 }
 
@@ -426,7 +426,7 @@ export function GraphView({
         contextRefs: contextReferences(state, selectedIds, selectionSources),
         text: input.draft,
         draftRevision: input.draftRev,
-        imageIds: input.imageIds,
+        attachmentIds: input.attachmentIds,
         hasStructuredReferences: false,
       }, controller.signal)
     } catch (cause: unknown) {
@@ -505,7 +505,7 @@ export function GraphView({
   useEffect(() => {
     if (activeTrailId !== null && !previewNodeIds.includes(activeTrailId)) setActiveTrailId(null)
   }, [activeTrailId, previewNodeIds])
-  const draftHasContent = input.draft.trim() !== '' || input.imageIds.length > 0
+  const draftHasContent = input.draft.trim() !== '' || input.attachmentIds.length > 0
   const trayModel: ContextTrayProps = {
     state,
     contextRefs: selectionRefs,
@@ -615,7 +615,7 @@ export function GraphView({
                 : localized('打开 Conversation Graph', 'Open Conversation Graph', locale)}
               onClick={() => setGraphOpen(open => !open)}
             >
-              <IconPanelLeftOutline16 size={16} />
+              <IconPanelLeftOutlineRegular size={16} />
             </button>
           </span>
           <span className="dsh-git-muted">

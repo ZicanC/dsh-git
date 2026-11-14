@@ -16,7 +16,7 @@ describe('Context Tray slot registration', () => {
       inject: vi.fn((_name: string, install: () => unknown) => install()),
       register,
     }
-    const listSnapshot = { current: undefined, ids: [], byId: {} }
+    const listSnapshot = { ids: [], byId: {} }
     const ctx = {
       slots,
       effect: vi.fn(),

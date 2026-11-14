@@ -38,13 +38,6 @@ function projectContentBlock(block: SourceContentBlock): HistoryPreviewContentBl
         name: block.name,
         arguments: block.arguments,
       }
-    case 'tool-result':
-      return {
-        type: 'tool-result',
-        callId: String(block.toolCallId),
-        content: block.content.map(projectContentBlock),
-        isError: block.isError ?? false,
-      }
     default:
       return {
         type: 'other',
@@ -91,14 +84,16 @@ function projectEvent(event: SessionEvent): HistoryPreviewRecord | undefined {
         arguments: event.data.arguments,
       }
     case 'tool/result': {
-      const block = event.data.message.content[0]
+      // A tool result is a first-class tool-role message: the call id and
+      // outcome sit on the message, and its content is the result itself.
+      const message = event.data.message
       return {
         kind: 'tool-result',
         seq: event.seq,
         step: event.data.step,
-        callId: String(block.toolCallId),
-        content: block.content.map(projectContentBlock),
-        isError: block.isError ?? false,
+        callId: String(message.toolCallId),
+        content: message.content.map(projectContentBlock),
+        isError: message.isError ?? false,
         ...(event.data.error === undefined ? {} : { error: event.data.error }),
         ...(event.data.meta === undefined
           ? {}
@@ -130,7 +125,7 @@ function projectEvent(event: SessionEvent): HistoryPreviewRecord | undefined {
     case 'turn/start':
     case 'step/start':
     case 'step/end':
-    case 'assistant/chunk':
+    case 'assistant/attempt':
       return undefined
     default:
       return {

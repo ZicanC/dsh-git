@@ -21,6 +21,8 @@ const HOST_ATTRIBUTE = 'data-dsh-git-project-host'
 export interface ProjectBridgeServices {
   readonly connection: ProjectConnection
   readonly sessions: ISessions
+  /** Show a Session in the main view; navigation belongs to the Workspace UI, not the Session list. */
+  readonly openSession: (sessionId: SessionId) => void
   readonly workspaces: IWorkspaces
   readonly repositoryForWorkspace: (workspaceId: string) => GraphRepository
   readonly repositoryForSession: (sessionId: string) => GraphRepository
@@ -37,10 +39,20 @@ function graphIcon(): string {
   return '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M3 3.5h3v3H3zM10 2h3v3h-3zM10 10h3v3h-3zM5.7 4.5h4.6M11.5 5v5M5.5 6.3l5 4.2" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/></svg>'
 }
 
+/**
+ * Find the sidebar row of one Workspace.
+ *
+ * Harness tags each Workspace row with its id (`data-row-key`), and that is the
+ * only reliable match: the visible label can be dictionary copy rather than the
+ * stored title, as it is for the default Workspace. Rows without the tag fall
+ * back to the title.
+ */
 function workspaceRow(workspace: WorkspaceView, used: ReadonlySet<HTMLElement>): HTMLElement | undefined {
-  return [...document.querySelectorAll<HTMLElement>('[role="treeitem"][aria-expanded]')]
-    .find(row => !used.has(row)
-      && row.querySelectorAll('button').length >= 2
+  const rows = [...document.querySelectorAll<HTMLElement>('[role="treeitem"][aria-expanded]')]
+    .filter(row => !used.has(row) && row.querySelectorAll('button').length >= 2)
+  const rowKey = `workspace:${workspace.workspaceId}`
+  return rows.find(row => row.getAttribute('data-row-key') === rowKey)
+    ?? rows.find(row => row.getAttribute('data-row-key') === null
       && [...row.querySelectorAll('span')]
         .some(span => span.textContent?.trim() === workspace.title))
 }
@@ -113,7 +125,7 @@ export function installProjectBridge(services: ProjectBridgeServices): () => voi
       onOpenSession={(sessionId) => {
         queueMicrotask(() => {
           close()
-          services.sessions.open(sessionId as SessionId)
+          services.openSession(sessionId as SessionId)
         })
       }}
     />)

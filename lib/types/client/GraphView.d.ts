@@ -14,7 +14,7 @@ export interface MergeDraftTransfer {
     readonly contextRefs?: readonly import('../graph-state.ts').ContextRef[];
     readonly text: string;
     readonly draftRevision: number;
-    readonly imageIds: readonly DraftAttachmentId[];
+    readonly attachmentIds: readonly DraftAttachmentId[];
     readonly hasStructuredReferences: boolean;
 }
 /** Browser callbacks and observables supplied from the plugin apply closure. */

@@ -2,9 +2,10 @@ import type { SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 /** Browser plugin: Conversation Graph selection and merge-only Chat creation. */
 import type { Context } from '@deepseek-ai/cordis'
-import type { ISessions, SessionBinding } from '@deepseek-ai/dsh-api-session-controller/client'
-import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { ISessions, SessionBinding, SessionReference } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { DraftAttachmentId, SessionInput } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
+import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type {} from '../connection-contract.ts'
 import {
   ANCHORED_SESSION_PREFIX,
@@ -28,6 +29,7 @@ import { ContextTrayDock, type ContextTrayDockInjected } from './ContextTrayDock
 import { GraphView, type GraphViewInjected } from './GraphView.tsx'
 import { ComposerBlockLease } from './composer-block-lease.ts'
 import { ContextTrayChannels } from './context-tray-channel.ts'
+import { draftAttachmentStaging } from './draft-attachments.ts'
 import { connectionGraphTransport } from './graph-transport.ts'
 import { contextReferences, resolveContextReferences, lineageParentPlan, normalizeContextOccurrences } from './graph.ts'
 import { installLocaleSource, localized } from './i18n.ts'
@@ -38,8 +40,15 @@ import { STYLES } from './styles.ts'
 import type { GraphState, TurnNodeId } from './types.ts'
 import { WorkspaceGraphRepositories } from './workspace-repositories.ts'
 
-/** Required client services: conversation view/input, sessions, Workspace, and locale. */
-export const inject = ['connection', 'slots', 'sessions', 'workspaces', 'locale', 'conversation']
+declare module '@deepseek-ai/dsh-api-session-controller/client' {
+  interface SessionReferenceSourceMap {
+    /** A dsh-git operation holding a Session it created or reads but does not display. */
+    dshGit: unknown
+  }
+}
+
+/** Required client services: conversation view/input, sessions, Workspace, navigation, and locale. */
+export const inject = ['connection', 'slots', 'sessions', 'workspaces', 'locale', 'conversation', 'uiWorkspace']
 
 function installStyles(): () => void {
   const existing = document.querySelector<HTMLStyleElement>('style[data-plugin="dsh-git"]')
@@ -68,23 +77,98 @@ async function pollingDelay(signal?: AbortSignal): Promise<void> {
   signal?.throwIfAborted()
 }
 
-async function waitForSession(
+/**
+ * Retain a Session the Host has just created for this plugin.
+ *
+ * A Session has a binding in the browser only while something retains it, and
+ * the last release tears its scope down together with any unsent draft. The
+ * caller therefore keeps the returned reference until the draft it placed has
+ * either been sent or handed to the main view.
+ * @returns the opened reference, or undefined when the Session cannot be opened.
+ */
+async function retainCreatedSession(
   sessions: ISessions, sessionId: SessionId, signal: AbortSignal,
-): Promise<SessionBinding | undefined> {
-  for (let attempt = 0; attempt < 80; attempt += 1) {
+): Promise<SessionReference | undefined> {
+  const reference = sessions.retain(sessionId, { source: 'dshGit', signal })
+  try {
+    await reference.ready
     signal.throwIfAborted()
-    const binding = sessions.binding(sessionId)
-    if (binding !== undefined) return binding
-    await pollingDelay(signal)
+    return reference
+  } catch (cause: unknown) {
+    reference.release()
+    signal.throwIfAborted()
+    console.error('dsh-git could not open the created Session:', cause)
+    return undefined
   }
-  return undefined
+}
+
+/** Whether a Session stages image uploads; a subagent continuation sends image bytes inline. */
+function stagesImageUploads(binding: SessionBinding): boolean {
+  return binding.session.getSnapshot().subagent === null
+}
+
+/** Release a reference once the submission started on its composer has settled. */
+function releaseAfterSubmission(input: SessionInput, reference: SessionReference): void {
+  const settled = (): boolean => input.state.getSnapshot().phase === 'plain'
+  if (settled()) {
+    reference.release()
+    return
+  }
+  const stop = input.state.subscribe(() => {
+    if (!settled()) return
+    stop()
+    reference.release()
+  })
+}
+
+/** A draft's attachments handed to another composer, with the way back. */
+type AttachmentHandOver =
+  | {
+    readonly ok: true
+    /** Resolves once the receiving Session can send every attachment. */
+    readonly whenReady: (signal: AbortSignal) => Promise<void>
+    /** Take the attachments back, for a draft that stays with its source after all. */
+    readonly undo: () => void
+  }
+  | { readonly ok: false }
+
+/**
+ * Hand a draft's attachments to another Session's composer and stage their
+ * uploads for it, as Harness does when a draft follows a Workspace switch.
+ * The source composer keeps listing them until the caller clears it.
+ * @returns the hand-over, or `ok: false` with nothing moved.
+ */
+function handOverAttachments(
+  conversation: unknown,
+  ids: readonly DraftAttachmentId[],
+  source: SessionBinding,
+  target: SessionBinding,
+  targetInput: SessionInput,
+): AttachmentHandOver {
+  if (ids.length === 0) return { ok: true, whenReady: async () => {}, undo: () => {} }
+  const staging = draftAttachmentStaging(conversation)
+  if (staging === undefined || !targetInput.addAttachments(ids)) return { ok: false }
+  staging.restage(target.sessionId, ids, stagesImageUploads(target))
+  return {
+    ok: true,
+    whenReady: signal => staging.whenReady(ids, signal),
+    undo: () => {
+      for (const id of ids) targetInput.removeAttachment(id)
+      staging.restage(source.sessionId, ids, stagesImageUploads(source))
+    },
+  }
+}
+
+/** Whether the main view currently shows this Session. */
+function isMainSession(sessions: ISessions, sessionId: SessionId): boolean {
+  return (sessions.retainInfo(sessionId).getSnapshot().retainedBy.mainView ?? 0) > 0
 }
 
 /** Select the plugin tab after navigation creates the child Session's header. */
 async function activateBranchesTab(sessions: ISessions, sessionId: SessionId): Promise<boolean> {
   let observedTargetSession = false
   for (let attempt = 0; attempt < 80; attempt += 1) {
-    if (sessions.list.getSnapshot().current !== sessionId) {
+    if (!isMainSession(sessions, sessionId)) {
       await pollingDelay()
       continue
     }
@@ -139,6 +223,7 @@ export function apply(ctx: Context): void {
   ctx.effect(() => installProjectBridge({
     connection: ctx.connection,
     sessions,
+    openSession: sessionId => { ctx.uiWorkspace.openSession(sessionId) },
     workspaces: ctx.workspaces,
     locale: ctx.locale,
     repositoryForWorkspace: workspaceId => repositories.forWorkspace(workspaceId),
@@ -183,7 +268,7 @@ export function apply(ctx: Context): void {
             '锚点问题不能包含 @ 引用或其他结构化 chip。',
             'Anchored questions cannot contain @ references or other structured chips.',
           ))
-          if (draft.draft.trim() === '' && draft.imageIds.length === 0) return
+          if (draft.draft.trim() === '' && draft.attachmentIds.length === 0) return
           const state = repository.getSnapshot()
           const currentAnchor = state.anchors[key]
           if (currentAnchor === undefined
@@ -229,37 +314,73 @@ export function apply(ctx: Context): void {
             'Host 返回了错误的锚点子会话 ID。',
             'The Host returned the wrong anchored child Session ID.',
           ))
-          const childBinding = await waitForSession(sessions, childSessionId, controller.signal)
-          if (childBinding === undefined) throw new Error(localized(
+          const child = await retainCreatedSession(sessions, childSessionId, controller.signal)
+          if (child === undefined) throw new Error(localized(
             `子会话 ${childSessionId} 已创建，但尚未到达浏览器；原草稿未清除。`,
             `Child Session ${childSessionId} was created but has not reached the browser; the source draft was preserved.`,
           ))
-          const latest = sourceInput.state.getSnapshot()
-          if (latest.phase !== 'plain'
-            || latest.draftRev !== draft.draftRev
-            || latest.draft !== draft.draft
-            || !sameValues(latest.imageIds, draft.imageIds)
-            || latest.occurrences.length > 0) {
-            throw new Error(localized(
-              '子会话已创建，但原草稿在期间发生变化；为避免覆盖，草稿未清除或发送。',
-              'The child Session was created, but the source draft changed; it was not cleared or sent.',
+          const childInput = ctx.conversation.input.for(child.binding.ctx)
+          let submitted = false
+          let returnAttachments: (() => void) | undefined
+          try {
+            const assertSourceUnchanged = (): void => {
+              const latest = sourceInput.state.getSnapshot()
+              if (latest.phase === 'plain'
+                && latest.draftRev === draft.draftRev
+                && latest.draft === draft.draft
+                && sameValues(latest.attachmentIds, draft.attachmentIds)
+                && latest.occurrences.length === 0) return
+              throw new Error(localized(
+                '子会话已创建，但原草稿在期间发生变化；为避免覆盖，草稿未清除或发送。',
+                'The child Session was created, but the source draft changed; it was not cleared or sent.',
+              ))
+            }
+            assertSourceUnchanged()
+            const handOver = handOverAttachments(
+              ctx.conversation, draft.attachmentIds, sourceBinding, child.binding, childInput,
+            )
+            if (!handOver.ok) {
+              throw new Error(localized(
+                '子会话已创建，但图片无法转移；原草稿未清除。',
+                'The child Session was created, but its images could not be transferred; the source draft was preserved.',
+              ))
+            }
+            returnAttachments = handOver.undo
+            try {
+              // The child sends at once, so its uploads must have finished first.
+              await handOver.whenReady(controller.signal)
+            } catch (cause: unknown) {
+              if (controller.signal.aborted) throw cause
+              throw new Error(localized(
+                `子会话已创建，但图片未能上传到子会话：${cause instanceof Error ? cause.message : String(cause)}；原草稿未清除。`,
+                `The child Session was created, but its images could not be uploaded to it: ${cause instanceof Error ? cause.message : String(cause)}; the source draft was preserved.`,
+              ))
+            }
+            assertSourceUnchanged()
+            childInput.setDraft(draft.draft)
+            childInput.submit()
+            if (childInput.state.getSnapshot().phase === 'plain') {
+              throw new Error(localized(
+                '子会话已创建，但问题未能提交；原草稿未清除。',
+                'The child Session was created, but the question could not be submitted; the source draft was preserved.',
+              ))
+            }
+            submitted = true
+            sourceInput.setDraft('')
+            for (const attachmentId of draft.attachmentIds) sourceInput.removeAttachment(attachmentId)
+            sourceInput.notify('info', localized(
+              `已发送到「${anchor.workspaceTitle}」中的独立子会话。`,
+              `Sent to an independent child Session in “${anchor.workspaceTitle}”.`,
             ))
+          } finally {
+            // The child is not on screen: this reference alone keeps its composer
+            // alive, so it is held until the Host has taken the question.
+            if (submitted) releaseAfterSubmission(childInput, child)
+            else {
+              returnAttachments?.()
+              child.release()
+            }
           }
-          const childInput = ctx.conversation.input.for(childBinding.ctx)
-          if (draft.imageIds.length > 0 && !childInput.addImages(draft.imageIds)) {
-            throw new Error(localized(
-              '子会话已创建，但图片无法转移；原草稿未清除。',
-              'The child Session was created, but its images could not be transferred; the source draft was preserved.',
-            ))
-          }
-          childInput.setDraft(draft.draft)
-          childInput.submit()
-          sourceInput.setDraft('')
-          for (const imageId of draft.imageIds) sourceInput.removeImage(imageId)
-          sourceInput.notify('info', localized(
-            `已发送到「${anchor.workspaceTitle}」中的独立子会话。`,
-            `Sent to an independent child Session in “${anchor.workspaceTitle}”.`,
-          ))
         })().catch((cause: unknown) => {
           if (controller.signal.aborted) return
           const binding = sessions.binding(sessionId)
@@ -353,9 +474,13 @@ export function apply(ctx: Context): void {
           return decodeHistoryPreviewResponse(result.value)
         },
         loadPreviewImage: async (sourceSessionId: string, attachment: HistoryPreviewImageAttachment) => {
-          const binding = sessions.binding(sourceSessionId as SessionId)
-          if (binding === undefined) throw new Error(`Cannot access preview image Session ${sourceSessionId}`)
-          const result = await binding.session.readAttachment(attachment.attachmentId as never)
+          // The source Session of a previewed PA is usually not the one on screen,
+          // so it is retained for the duration of the read.
+          const result = await sessions.using(
+            sourceSessionId as SessionId,
+            { source: 'dshGit' },
+            reference => reference.binding.session.readAttachment(attachment.attachmentId as never),
+          )
           if (!result.ok) throw new Error(result.error.message)
           const bytes = new Uint8Array(result.value.data)
           const url = URL.createObjectURL(new Blob([bytes.buffer], { type: attachment.mediaType }))
@@ -502,40 +627,57 @@ export function apply(ctx: Context): void {
             primaryParentId: parents.primaryParentId,
             contextManifest,
           })
-          const childBinding = await waitForSession(sessions, childSessionId, signal)
-          if (childBinding === undefined) {
+          const child = await retainCreatedSession(sessions, childSessionId, signal)
+          if (child === undefined) {
             throw new Error(localized(
               `新 Chat ${childSessionId} 已创建，但浏览器尚未收到对应 Session；原草稿未改动。`,
               `The new Chat ${childSessionId} was created, but its Session has not reached the browser; the source draft was preserved.`,
             ))
           }
-
-          const sourceInput = ctx.conversation.input.for(sourceBinding.ctx)
-          const childInput = ctx.conversation.input.for(childBinding.ctx)
-          const sourceDraft = sourceInput.state.getSnapshot()
-          if (sourceDraft.phase !== 'plain'
-            || sourceDraft.draftRev !== draft.draftRevision
-            || sourceDraft.draft !== draft.text
-            || !sameValues(sourceDraft.imageIds, draft.imageIds)
-            || sourceDraft.occurrences.length > 0) {
-            throw new Error(localized(
-              `新 Chat ${childSessionId} 已创建，但来源草稿在创建期间发生变化；为避免覆盖，新旧草稿均未转移或清除。`,
-              `The new Chat ${childSessionId} was created, but the source draft changed during creation. Neither draft was moved or cleared, to avoid overwriting newer input.`,
-            ))
+          // Resolved while the reference is held: a released reference has no binding.
+          const childInput = ctx.conversation.input.for(child.binding.ctx)
+          try {
+            const sourceInput = ctx.conversation.input.for(sourceBinding.ctx)
+            const sourceDraft = sourceInput.state.getSnapshot()
+            if (sourceDraft.phase !== 'plain'
+              || sourceDraft.draftRev !== draft.draftRevision
+              || sourceDraft.draft !== draft.text
+              || !sameValues(sourceDraft.attachmentIds, draft.attachmentIds)
+              || sourceDraft.occurrences.length > 0) {
+              throw new Error(localized(
+                `新 Chat ${childSessionId} 已创建，但来源草稿在创建期间发生变化；为避免覆盖，新旧草稿均未转移或清除。`,
+                `The new Chat ${childSessionId} was created, but the source draft changed during creation. Neither draft was moved or cleared, to avoid overwriting newer input.`,
+              ))
+            }
+            signal.throwIfAborted()
+            // No cancellation point from here to `openSession`: a draft placed in a
+            // Chat that is never shown would be lost together with its scope.
+            const handOver = handOverAttachments(
+              ctx.conversation, draft.attachmentIds, sourceBinding, child.binding, childInput,
+            )
+            if (!handOver.ok) {
+              throw new Error(localized(
+                `新 Chat ${childSessionId} 已创建，但图片草稿无法转移；原草稿未改动。`,
+                `The new Chat ${childSessionId} was created, but its image draft could not be transferred; the source draft was preserved.`,
+              ))
+            }
+            childInput.setDraft(draft.text)
+            // The source is emptied before navigation: leaving the main view may
+            // dispose its composer, which releases every attachment it still lists.
+            sourceInput.setDraft('')
+            for (const attachmentId of draft.attachmentIds) sourceInput.removeAttachment(attachmentId)
+            try {
+              // The main view retains the child before this operation lets go of it.
+              ctx.uiWorkspace.openSession(childSessionId)
+            } catch (cause: unknown) {
+              handOver.undo()
+              sourceInput.addAttachments(draft.attachmentIds)
+              sourceInput.setDraft(draft.text)
+              throw cause
+            }
+          } finally {
+            child.release()
           }
-          signal.throwIfAborted()
-          if (draft.imageIds.length > 0 && !childInput.addImages(draft.imageIds)) {
-            throw new Error(localized(
-              `新 Chat ${childSessionId} 已创建，但图片草稿无法转移；原草稿未改动。`,
-              `The new Chat ${childSessionId} was created, but its image draft could not be transferred; the source draft was preserved.`,
-            ))
-          }
-          childInput.setDraft(draft.text)
-          sourceInput.setDraft('')
-          for (const imageId of draft.imageIds) sourceInput.removeImage(imageId)
-
-          signal.throwIfAborted()
-          sessions.open(childSessionId)
           if (!await activateBranchesTab(sessions, childSessionId)) {
             childInput.notify('error', localized(
               '新 Chat 已创建并打开，但无法自动切回 Branches；请手动点击“分支”。',
