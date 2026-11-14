@@ -107,17 +107,41 @@ function stagesImageUploads(binding: SessionBinding): boolean {
   return binding.session.getSnapshot().subagent === null
 }
 
-/** Release a reference once the submission started on its composer has settled. */
-function releaseAfterSubmission(input: SessionInput, reference: SessionReference): void {
-  const settled = (): boolean => input.state.getSnapshot().phase === 'plain'
-  if (settled()) {
-    reference.release()
-    return
-  }
-  const stop = input.state.subscribe(() => {
-    if (!settled()) return
-    stop()
-    reference.release()
+/**
+ * Wait for the submission started on a composer to settle.
+ *
+ * The composer is frozen while the Host admits a message. An accepted message
+ * empties it; a refused one returns it to editing with the draft intact.
+ * @returns whether the Host took the message.
+ * @throws when the signal aborts first.
+ */
+function submissionAccepted(input: SessionInput, signal: AbortSignal): Promise<boolean> {
+  return new Promise<boolean>((resolve, reject) => {
+    let stop: (() => void) | undefined
+    let settled = false
+    const settle = (finish: () => void): void => {
+      if (settled) return
+      settled = true
+      stop?.()
+      signal.removeEventListener('abort', onAbort)
+      finish()
+    }
+    const onAbort = (): void => { settle(() => { reject(signal.reason) }) }
+    const check = (): void => {
+      const state = input.state.getSnapshot()
+      if (state.phase !== 'plain' && state.phase !== 'claimed') return
+      const taken = state.phase === 'plain' && state.draft.trim() === '' && state.attachmentIds.length === 0
+      settle(() => { resolve(taken) })
+    }
+    if (signal.aborted) {
+      reject(signal.reason)
+      return
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    check()
+    if (settled) return
+    stop = input.state.subscribe(check)
+    if (settled) stop()
   })
 }
 
@@ -323,16 +347,19 @@ export function apply(ctx: Context): void {
             `Child Session ${childSessionId} was created but has not reached the browser; the source draft was preserved.`,
           ))
           const childInput = ctx.conversation.input.for(child.binding.ctx)
-          let submitted = false
+          let accepted = false
           let returnAttachments: (() => void) | undefined
           try {
-            const assertSourceUnchanged = (): void => {
+            const sourceUnchanged = (): boolean => {
               const latest = sourceInput.state.getSnapshot()
-              if (latest.phase === 'plain'
+              return latest.phase === 'plain'
                 && latest.draftRev === draft.draftRev
                 && latest.draft === draft.draft
                 && sameValues(latest.attachmentIds, draft.attachmentIds)
-                && latest.occurrences.length === 0) return
+                && latest.occurrences.length === 0
+            }
+            const assertSourceUnchanged = (): void => {
+              if (sourceUnchanged()) return
               throw new Error(localized(
                 '子会话已创建，但原草稿在期间发生变化；为避免覆盖，草稿未清除或发送。',
                 'The child Session was created, but the source draft changed; it was not cleared or sent.',
@@ -368,21 +395,27 @@ export function apply(ctx: Context): void {
                 'The child Session was created, but the question could not be submitted; the source draft was preserved.',
               ))
             }
-            submitted = true
-            sourceInput.setDraft('')
+            // The source composer keeps the question until the Host has taken
+            // it: the child is not on screen, so a refused question would
+            // otherwise be lost together with the child's composer.
+            accepted = await submissionAccepted(childInput, controller.signal)
+            if (!accepted) {
+              throw new Error(localized(
+                '子会话未接受该问题；问题仍保留在输入框中。',
+                'The child Session did not accept the question; it is still in the composer.',
+              ))
+            }
+            // Text typed while the question was being admitted is newer input and stays.
+            if (sourceUnchanged()) sourceInput.setDraft('')
             for (const attachmentId of draft.attachmentIds) sourceInput.removeAttachment(attachmentId)
             sourceInput.notify('info', localized(
               `已发送到「${anchor.workspaceTitle}」中的独立子会话。`,
               `Sent to an independent child Session in “${anchor.workspaceTitle}”.`,
             ))
           } finally {
-            // The child is not on screen: this reference alone keeps its composer
-            // alive, so it is held until the Host has taken the question.
-            if (submitted) releaseAfterSubmission(childInput, child)
-            else {
-              returnAttachments?.()
-              child.release()
-            }
+            if (!accepted) returnAttachments?.()
+            // Only this reference kept the unseen child's composer alive.
+            child.release()
           }
         })().catch((cause: unknown) => {
           if (controller.signal.aborted) return

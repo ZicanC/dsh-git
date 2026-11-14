@@ -10,8 +10,8 @@ import {
   CREATE_ANCHORED_SESSION_RPC_ENDPOINT,
 } from '../src/protocol.ts'
 
-describe('anchor client flow', () => {
-  it('creates a real Anchor Workspace and dispatches without opening or extending the source Chat', async () => {
+/** A browser whose main view shows `source`, with one completed turn anchored. */
+async function anchoredFixture(options: { attachmentIds?: readonly string[] } = {}) {
     const registrations: Array<{ options: Record<string, unknown> }> = []
     const slots = {
       inject: vi.fn((_name: string, install: () => unknown) => install()),
@@ -22,35 +22,47 @@ describe('anchor client flow', () => {
     }
     const sourceCtx = { id: 'source-ctx' }
     const childCtx = { id: 'child-ctx' }
-    const bindings = new Map<string, { sessionId: string; ctx: object }>([
-      ['source', { sessionId: 'source', ctx: sourceCtx }],
+    const session = { getSnapshot: () => ({ subagent: null }) }
+    const bindings = new Map<string, { sessionId: string; ctx: object; session: typeof session }>([
+      ['source', { sessionId: 'source', ctx: sourceCtx, session }],
     ])
     const sourceDraft = {
-      draft: 'parallel question', draftRev: 7, phase: 'plain', attachmentIds: [], occurrences: [],
+      draft: 'parallel question', draftRev: 7, phase: 'plain',
+      attachmentIds: [...(options.attachmentIds ?? [])], occurrences: [],
     }
     const sourceInput = {
       state: { getSnapshot: () => sourceDraft },
       setDraft: vi.fn(), addAttachments: vi.fn(() => true), removeAttachment: vi.fn(() => true),
       submit: vi.fn(), notify: vi.fn(),
     }
-    // The child composer freezes while the Host admits the question.
-    let childPhase = 'plain'
+    // The child composer freezes while the Host admits the question. An
+    // accepted question empties it; a refused one comes back for editing.
+    let child = { phase: 'plain', draft: '', attachmentIds: [] as string[] }
     const childListeners = new Set<() => void>()
-    const settleChildSubmission = (): void => {
-      childPhase = 'plain'
+    const settleChildSubmission = (accepted: boolean): void => {
+      child = accepted ? { phase: 'plain', draft: '', attachmentIds: [] } : { ...child, phase: 'plain' }
       for (const listener of childListeners) listener()
     }
     const childInput = {
       state: {
-        getSnapshot: () => ({ phase: childPhase }),
+        getSnapshot: () => child,
         subscribe: (listener: () => void) => {
           childListeners.add(listener)
           return () => { childListeners.delete(listener) }
         },
       },
-      setDraft: vi.fn(), addAttachments: vi.fn(() => true), removeAttachment: vi.fn(() => true),
-      submit: vi.fn(() => { childPhase = 'sending' }), notify: vi.fn(),
+      setDraft: vi.fn((draft: string) => { child = { ...child, draft } }),
+      addAttachments: vi.fn((ids: readonly string[]) => {
+        child = { ...child, attachmentIds: [...child.attachmentIds, ...ids] }
+        return true
+      }),
+      removeAttachment: vi.fn((id: string) => {
+        child = { ...child, attachmentIds: child.attachmentIds.filter(candidate => candidate !== id) }
+        return true
+      }),
+      submit: vi.fn(() => { child = { ...child, phase: 'sending' } }), notify: vi.fn(),
     }
+    const restaged: string[] = []
     const open = vi.fn()
     const release = vi.fn()
     const retain = vi.fn((sessionId: string, _options: { source: string }) => {
@@ -96,7 +108,7 @@ describe('anchor client flow', () => {
       if (endpoint === CANCEL_ANCHOR_WORKSPACE_RPC_ENDPOINT) return { ok: true, value: { removed: false } }
       if (endpoint === CREATE_ANCHORED_SESSION_RPC_ENDPOINT) {
         const targetSessionId = String(payload.targetSessionId)
-        bindings.set(targetSessionId, { sessionId: targetSessionId, ctx: childCtx })
+        bindings.set(targetSessionId, { sessionId: targetSessionId, ctx: childCtx, session })
         workspaceItems = [...workspaceItems, {
           workspaceId: 'anchor-workspace', title: '锚点问题 · Project',
           path: '/project/dsh-git-anchors-test', sessionIds: [targetSessionId],
@@ -124,6 +136,10 @@ describe('anchor client flow', () => {
       conversation: {
         blocks: {},
         input: { for: (bindingCtx: object) => bindingCtx === sourceCtx ? sourceInput : childInput },
+        rebindDraftFiles: (sessionId: string) => {
+          restaged.push(sessionId.startsWith('dsh-git-anchor-') ? 'child' : sessionId)
+        },
+        fileUploads: { getSnapshot: () => ({}), subscribe: () => () => {} },
       },
     } as unknown as Context
 
@@ -137,6 +153,21 @@ describe('anchor client flow', () => {
     }])
     const nodeId = view.hooks.graph.getSnapshot().sessionTurnRefs.source![1]!
     await view.activateAnchor([nodeId], new AbortController().signal)
+    const discard = (discardRegistration.options.inject as (
+      sessionId: string,
+    ) => ComposerDiscardActionInjected)('source')
+    return {
+      view, viewRegistration, discard, nodeId, rpcCall, sourceInput, childInput, settleChildSubmission,
+      retain, release, open, createDirectory, createWorkspace, rename, restaged,
+    }
+}
+
+describe('anchor client flow', () => {
+  it('creates a real Anchor Workspace and dispatches without opening or extending the source Chat', async () => {
+    const {
+      view, viewRegistration, discard, nodeId, rpcCall, sourceInput, childInput, settleChildSubmission,
+      retain, release, open, createDirectory, createWorkspace, rename,
+    } = await anchoredFixture()
 
     expect(createDirectory).not.toHaveBeenCalled()
     expect(createWorkspace).not.toHaveBeenCalled()
@@ -152,22 +183,21 @@ describe('anchor client flow', () => {
       expect.any(AbortSignal),
     )
     expect(view.hooks.graph.getSnapshot().anchors.source?.nodeIds).toEqual([nodeId])
-    const discard = (discardRegistration.options.inject as (
-      sessionId: string,
-    ) => ComposerDiscardActionInjected)('source')
     discard.dispatchAnchoredDraft()
     await vi.waitFor(() => expect(childInput.submit).toHaveBeenCalledTimes(1))
 
     expect(childInput.setDraft).toHaveBeenCalledWith('parallel question')
-    expect(sourceInput.setDraft).toHaveBeenCalledWith('')
-    expect(sourceInput.notify).toHaveBeenCalledWith('info', expect.stringContaining('锚点问题 · Project'))
     expect(open).not.toHaveBeenCalled()
     // The child is never shown, so the plugin's own reference keeps its composer
-    // alive until the Host has taken the question.
+    // alive until the Host has taken the question — and until then the source
+    // composer still holds the only other copy of it.
     expect(retain).toHaveBeenCalledWith(expect.stringMatching(/^dsh-git-anchor-/), expect.objectContaining({ source: 'dshGit' }))
     expect(release).not.toHaveBeenCalled()
-    settleChildSubmission()
-    expect(release).toHaveBeenCalledTimes(1)
+    expect(sourceInput.setDraft).not.toHaveBeenCalled()
+    settleChildSubmission(true)
+    await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1))
+    expect(sourceInput.setDraft).toHaveBeenCalledWith('')
+    expect(sourceInput.notify).toHaveBeenCalledWith('info', expect.stringContaining('锚点问题 · Project'))
     const anchoredCall = rpcCall.mock.calls.find(([, endpoint]) => endpoint === CREATE_ANCHORED_SESSION_RPC_ENDPOINT)
     expect(anchoredCall?.[2]).toMatchObject({
       workspaceId: 'anchor-workspace',
@@ -210,5 +240,38 @@ describe('anchor client flow', () => {
     })
     expect(rpcCall.mock.calls.filter(([, endpoint]) =>
       endpoint === CREATE_ANCHOR_WORKSPACE_RPC_ENDPOINT)).toHaveLength(2)
+  })
+
+  it('keeps the question and its attachments in the source composer when the child Session refuses it', async () => {
+    const {
+      discard, sourceInput, childInput, settleChildSubmission, release, restaged,
+    } = await anchoredFixture({ attachmentIds: ['file-1'] })
+
+    discard.dispatchAnchoredDraft()
+    await vi.waitFor(() => expect(childInput.submit).toHaveBeenCalledTimes(1))
+    expect(restaged).toEqual(['child'])
+    settleChildSubmission(false)
+    await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1))
+
+    // Nothing was taken from the source, and what the child held went back.
+    expect(sourceInput.setDraft).not.toHaveBeenCalled()
+    expect(sourceInput.removeAttachment).not.toHaveBeenCalled()
+    expect(childInput.removeAttachment).toHaveBeenCalledWith('file-1')
+    expect(restaged).toEqual(['child', 'source'])
+    expect(sourceInput.notify).toHaveBeenCalledWith('error', expect.stringMatching(/未接受|did not accept/))
+    expect(sourceInput.notify).not.toHaveBeenCalledWith('info', expect.anything())
+  })
+
+  it('does not dispatch the same question twice while the first is still being admitted', async () => {
+    const { discard, childInput, settleChildSubmission, rpcCall, release } = await anchoredFixture()
+
+    discard.dispatchAnchoredDraft()
+    await vi.waitFor(() => expect(childInput.submit).toHaveBeenCalledTimes(1))
+    discard.dispatchAnchoredDraft()
+    settleChildSubmission(true)
+    await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1))
+
+    expect(rpcCall.mock.calls.filter(([, endpoint]) =>
+      endpoint === CREATE_ANCHORED_SESSION_RPC_ENDPOINT)).toHaveLength(1)
   })
 })
