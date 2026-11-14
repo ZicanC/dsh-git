@@ -23,7 +23,6 @@ function ledger(): GraphState {
     primaryParentId: refs[2]!,
     contextManifest: [refs[2]!, refs[1]!],
   })
-  repository.renameBranch(repository.getSnapshot().sessionBranches.source!, 'research-line')
   return repository.getSnapshot()
 }
 

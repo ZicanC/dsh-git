@@ -195,3 +195,54 @@ describe('one occurrence per Session and PA', () => {
     expect(Object.keys(transport.scopes.get('w')!.nodes)).toHaveLength(3)
   })
 })
+
+describe('ledger writes', () => {
+  it('writes nothing when Sessions that are already recorded are opened again', async () => {
+    const transport = new MemoryTransport()
+    const repository = new GraphRepository(transport, 'workspace:one')
+    await repository.hydrate()
+    repository.syncSession('S', parentTurns)
+    repository.syncSession('T', childTurns, { T: 'S' })
+    const sourceId = repository.getSnapshot().sessionTurnRefs.S![2]!
+    repository.prepareMergedSession({
+      childSessionId: 'dsh-git-child',
+      importedNodeIds: [sourceId],
+      parentIds: [sourceId],
+      primaryParentId: sourceId,
+      contextManifest: [sourceId],
+    })
+    repository.syncSession('dsh-git-child', [turn(1, '2', 5), turn(2, 'new', 11)])
+    const observed = repository.getSnapshot()
+    const recorded = transport.writes
+
+    // Switching between the three Chats, and re-reading the Workspace graph,
+    // observes nothing new: the shared ledger must not be rewritten.
+    repository.syncSession('S', parentTurns, { T: 'S' })
+    repository.syncSession('T', childTurns, { T: 'S' })
+    repository.syncSession('dsh-git-child', [turn(1, '2', 5), turn(2, 'new', 11)], { T: 'S' })
+    repository.syncSession('S', parentTurns, { T: 'S' })
+    repository.adoptObservedGraph(observed)
+
+    expect(transport.writes).toBe(recorded)
+    expect(repository.getSnapshot()).toBe(observed)
+  })
+
+  it('leaves the view pointers of the shared ledger alone', () => {
+    const repository = new GraphRepository()
+    repository.syncSession('S', parentTurns)
+    const sourceId = repository.getSnapshot().sessionTurnRefs.S![2]!
+    repository.prepareMergedSession({
+      childSessionId: 'dsh-git-child',
+      importedNodeIds: [sourceId],
+      parentIds: [sourceId],
+      primaryParentId: sourceId,
+      contextManifest: [sourceId],
+    })
+
+    const state = repository.getSnapshot()
+    expect({ head: state.headNodeId, preview: state.previewNodeId, tray: state.contextManifest })
+      .toEqual({ head: null, preview: null, tray: [] })
+    // Each Session's own head is still recorded on its branch.
+    expect(state.branches[state.sessionBranches.S!]!.headId).toBe(sourceId)
+  })
+})

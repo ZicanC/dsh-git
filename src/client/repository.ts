@@ -1,12 +1,11 @@
 import { finalizeGraph, repairOccurrences } from '../graph-ledger.ts'
-import { paIdentityId } from './graph.ts'
 import type { GraphTransport } from './graph-transport.ts'
 import {
   adoptObservedGraph, prepareMergedSession, reconcileOfficialForks, syncSessionTurns,
 } from './ledger-transitions.ts'
 import { EMPTY_GRAPH_STATE } from './types.ts'
 import type {
-  AnchorModeState, BranchId, GraphState, ImportedTurn, PrepareMergedSessionInput, TurnNodeId,
+  AnchorModeState, GraphState, ImportedTurn, PrepareMergedSessionInput,
 } from './types.ts'
 
 const EMPTY_STATE = EMPTY_GRAPH_STATE
@@ -156,16 +155,6 @@ export class GraphRepository {
     this.run(() => { this.commit(prepareMergedSession(this.state, input)) })
   }
 
-  /** Remove pending metadata for an abandoned merged Session. */
-  abortPending(sessionId: string): void {
-    this.run(() => {
-      if (this.state.pendingMerges[sessionId] === undefined) return
-      const pendingMerges = { ...this.state.pendingMerges }
-      delete pendingMerges[sessionId]
-      this.commit({ ...this.state, pendingMerges })
-    })
-  }
-
   /** Freeze one source Session's selected context into an Anchor Workspace. */
   activateAnchor(sessionId: string, anchor: AnchorModeState): void {
     this.run(() => {
@@ -187,80 +176,6 @@ export class GraphRepository {
       const anchors = { ...this.state.anchors }
       delete anchors[sessionId]
       this.commit({ ...this.state, anchors })
-    })
-  }
-
-  /** Toggle one node in the context tray; additions restore creation-time order. */
-  toggleContext(nodeId: TurnNodeId): void {
-    this.run(() => {
-      if (this.state.nodes[nodeId] === undefined) return
-      const selected = new Set(this.state.contextManifest)
-      if (selected.has(nodeId)) {
-        selected.delete(nodeId)
-        this.commit({ ...this.state, contextManifest: this.state.contextManifest.filter(id => selected.has(id)) })
-        return
-      }
-      const equivalent = this.state.contextManifest.find(id => paIdentityId(this.state, id) === paIdentityId(this.state, nodeId))
-      if (equivalent !== undefined) {
-        this.commit({ ...this.state, contextManifest: this.state.contextManifest.map(id => id === equivalent ? nodeId : id) })
-        return
-      }
-      const currentlyChronological = this.state.contextManifest.every((id, index, values) =>
-        index === 0
-        || this.state.nodes[values[index - 1]!]!.createdAt <= this.state.nodes[id]!.createdAt)
-      const contextManifest = currentlyChronological
-        ? [...selected, nodeId].sort((left, right) =>
-          this.state.nodes[left]!.createdAt - this.state.nodes[right]!.createdAt)
-        : [...this.state.contextManifest, nodeId]
-      this.commit({ ...this.state, contextManifest })
-    })
-  }
-
-  /** Remove all nodes from the next-request tray. */
-  clearContext(): void {
-    this.run(() => { this.commit({ ...this.state, contextManifest: [] }) })
-  }
-
-  /** Move one selected node before another selected node. */
-  moveContext(nodeId: TurnNodeId, beforeId: TurnNodeId): void {
-    this.run(() => {
-      if (nodeId === beforeId) return
-      const next = this.state.contextManifest.filter(id => id !== nodeId)
-      const index = next.indexOf(beforeId)
-      if (index < 0 || !this.state.contextManifest.includes(nodeId)) return
-      next.splice(index, 0, nodeId)
-      this.commit({ ...this.state, contextManifest: next })
-    })
-  }
-
-  /** Move one selected node to the end of the tray. */
-  moveContextToEnd(nodeId: TurnNodeId): void {
-    this.run(() => {
-      if (!this.state.contextManifest.includes(nodeId)) return
-      this.commit({
-        ...this.state,
-        contextManifest: [...this.state.contextManifest.filter(id => id !== nodeId), nodeId],
-      })
-    })
-  }
-
-  /** Change only the preview selection. */
-  preview(nodeId: TurnNodeId): void {
-    this.run(() => {
-      if (this.state.nodes[nodeId] !== undefined) this.commit({ ...this.state, previewNodeId: nodeId })
-    })
-  }
-
-  /** Rename a branch in the graph ledger. */
-  renameBranch(branchId: BranchId, name: string): void {
-    this.run(() => {
-      const branch = this.state.branches[branchId]
-      const normalized = name.trim()
-      if (branch === undefined || normalized === '') return
-      this.commit({
-        ...this.state,
-        branches: { ...this.state.branches, [branchId]: { ...branch, name: normalized } },
-      })
     })
   }
 }

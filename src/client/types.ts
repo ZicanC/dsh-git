@@ -24,24 +24,3 @@ export interface PrepareMergedSessionInput {
   readonly primaryParentId: TurnNodeId | null
   readonly contextManifest: readonly TurnNodeId[]
 }
-
-/** One graph node's deterministic drawing position. */
-export interface GraphPosition {
-  readonly nodeId: TurnNodeId
-  readonly row: number
-  readonly lane: number
-}
-
-/** One directed edge drawn from a parent into its child. */
-export interface GraphEdge {
-  readonly parentId: TurnNodeId
-  readonly childId: TurnNodeId
-  readonly merge: boolean
-}
-
-/** Complete deterministic drawing model for the GitLens-style graph. */
-export interface GraphLayout {
-  readonly positions: readonly GraphPosition[]
-  readonly edges: readonly GraphEdge[]
-  readonly laneCount: number
-}

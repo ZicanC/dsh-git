@@ -6,7 +6,7 @@
  * commits whatever these return.
  */
 import { identityOf, repairOccurrences, replaceNodes } from '../graph-ledger.ts'
-import { normalizeContextOccurrences, primaryPath } from './graph.ts'
+import { normalizeContextOccurrences } from './graph.ts'
 import type {
   BranchId, GraphState, ImportedTurn, PrepareMergedSessionInput, TurnNode, TurnNodeId,
 } from './types.ts'
@@ -99,7 +99,10 @@ export function syncSessionTurns(state: GraphState, sessionId: string, turns: re
   const branch = next.branches[branchId]
   const pendingMerges = { ...next.pendingMerges }
   if (next.pendingMerges[sessionId] !== undefined && pending === undefined) delete pendingMerges[sessionId]
-  const shouldSeedTray = next.contextManifest.length === 0 && headId !== null
+  // `headNodeId`, `previewNodeId`, and the ledger-level `contextManifest` are
+  // deliberately left alone. One ledger serves every Chat of a Workspace, so
+  // which Chat is on screen is not ledger state: each Session's head lives on
+  // its branch, and selection lives in the view.
   return {
     ...next,
     nodes,
@@ -109,9 +112,6 @@ export function syncSessionTurns(state: GraphState, sessionId: string, turns: re
     },
     sessionTurnRefs: { ...next.sessionTurnRefs, [sessionId]: knownRefs },
     pendingMerges,
-    headNodeId: headId,
-    previewNodeId: next.previewNodeId ?? headId,
-    contextManifest: shouldSeedTray ? primaryPath({ ...next, nodes }, headId) : next.contextManifest,
   }
 }
 
@@ -286,7 +286,6 @@ export function prepareMergedSession(state: GraphState, input: PrepareMergedSess
         ...(input.contextRefs === undefined ? {} : { contextRefs: input.contextRefs }),
       },
     },
-    headNodeId: inheritedHeadId,
   }
 }
 
@@ -308,12 +307,6 @@ export function adoptObservedGraph(state: GraphState, observed: GraphState): Gra
     state.nodes[id] === undefined ? { ...node, ledgerOrdinal: undefined, finalOrdinal: undefined } : node,
   ]))
   const nodes = { ...imported, ...state.nodes }
-  const headNodeId = state.headNodeId !== null && nodes[state.headNodeId] !== undefined
-    ? state.headNodeId
-    : observed.headNodeId
-  const previewNodeId = state.previewNodeId !== null && nodes[state.previewNodeId] !== undefined
-    ? state.previewNodeId
-    : null
   // The observed graph may name a turn this ledger already holds under
   // another id. The ledger's own record wins; the observed one is folded
   // into it instead of becoming a second occurrence.
@@ -323,7 +316,5 @@ export function adoptObservedGraph(state: GraphState, observed: GraphState): Gra
     branches: { ...observed.branches, ...state.branches },
     sessionBranches: { ...observed.sessionBranches, ...state.sessionBranches },
     sessionTurnRefs,
-    headNodeId,
-    previewNodeId,
   })
 }

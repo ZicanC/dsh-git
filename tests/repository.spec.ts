@@ -12,7 +12,7 @@ const turn = (number: number, createdAt = number * 10) => ({
 })
 
 describe('GraphRepository', () => {
-  it('imports a linear session and seeds the tray with the primary path', async () => {
+  it('imports a linear session without touching the ledger-level view pointers', async () => {
     const transport = new MemoryTransport()
     const repository = new GraphRepository(transport, 'workspace:one')
     await repository.hydrate()
@@ -25,7 +25,9 @@ describe('GraphRepository', () => {
     expect(second.parentIds).toEqual([first.id])
     expect(second.contextManifest).toEqual([])
     expect(second.contextKnown).toBe(false)
-    expect(state.contextManifest).toEqual([first.id, second.id])
+    expect(state.branches[state.sessionBranches.s1!]!.headId).toBe(second.id)
+    expect(state.contextManifest).toEqual([])
+    expect(state.headNodeId).toBeNull()
     expect(transport.scopes.get('workspace:one')).toEqual(state)
   })
 
@@ -66,35 +68,26 @@ describe('GraphRepository', () => {
     const localBefore = repository.getSnapshot()
     const localNodeId = localBefore.sessionTurnRefs.local![1]!
     const localBranchId = localBefore.sessionBranches.local!
-    repository.renameBranch(localBranchId, 'kept-local-name')
+    const localBranch = localBefore.branches[localBranchId]!
 
     const observedRepository = new GraphRepository()
     observedRepository.syncSession('remote', [{ ...turn(1), prompt: 'remote question' }])
     const observed = observedRepository.getSnapshot()
     const remoteNodeId = observed.sessionTurnRefs.remote![1]!
 
-    repository.adoptObservedGraph(observed)
+    // The observed graph describes the local branch under another name.
+    repository.adoptObservedGraph({
+      ...observed,
+      branches: { ...observed.branches, [localBranchId]: { ...localBranch, name: 'observed-name' } },
+    })
 
     const state = repository.getSnapshot()
     expect(state.sessionTurnRefs.local![1]).toBe(localNodeId)
     expect(state.sessionTurnRefs.remote![1]).toBe(remoteNodeId)
     expect(state.nodes[remoteNodeId]?.prompt).toBe('remote question')
-    expect(state.branches[localBranchId]?.name).toBe('kept-local-name')
-    expect(state.headNodeId).toBe(localNodeId)
-    expect(state.contextManifest).toEqual([localNodeId])
-  })
-
-  it('keeps a manual tray order when another node is selected', () => {
-    const repository = new GraphRepository()
-    repository.syncSession('s1', [turn(1), turn(2), turn(3)])
-    const state = repository.getSnapshot()
-    const one = state.sessionTurnRefs.s1![1]!
-    const two = state.sessionTurnRefs.s1![2]!
-    const three = state.sessionTurnRefs.s1![3]!
-    repository.moveContext(three, one)
-    repository.toggleContext(two)
-    repository.toggleContext(two)
-    expect(repository.getSnapshot().contextManifest).toEqual([three, one, two])
+    expect(state.branches[localBranchId]?.name).toBe(localBranch.name)
+    expect(state.branches[localBranchId]?.headId).toBe(localNodeId)
+    expect(state.headNodeId).toBeNull()
   })
 
   it('registers imported turns and creates a multi-parent node from the first new official turn', () => {
@@ -231,14 +224,6 @@ describe('GraphRepository', () => {
     expect(labels.get(forkNext)).toBe(oldLabel)
     expect(Object.values(state.nodes).filter(node => node.prompt === 'q1')).toHaveLength(1)
     expect(Object.values(state.nodes).filter(node => node.prompt === 'q2')).toHaveLength(2)
-  })
-
-  it('persists a branch rename', () => {
-    const repository = new GraphRepository()
-    repository.syncSession('s1', [turn(1)])
-    const branchId = repository.getSnapshot().sessionBranches.s1!
-    repository.renameBranch(branchId, 'research-line')
-    expect(repository.getSnapshot().branches[branchId]?.name).toBe('research-line')
   })
 
   it('freezes and cancels an Anchor Workspace binding without changing graph nodes', () => {
