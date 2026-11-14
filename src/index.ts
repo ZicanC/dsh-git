@@ -186,6 +186,74 @@ function failure(error: unknown): { ok: false; error: { code: string; message: s
   }
 }
 
+type SessionSnapshot = Awaited<ReturnType<Context['sessionQuery']['readSession']>>
+
+/**
+ * Compose the selected turns into a seed and create the child Agent from it.
+ *
+ * The last source's Session — the one it was selected through — is the child's
+ * official parent and supplies its preset. Each source Session's log is read
+ * once per request however many of its turns were selected.
+ * @param cwdOf - working directory for the child, given the parent's snapshot.
+ */
+async function createComposedAgent(
+  ctx: Context,
+  targetSessionId: ReturnType<typeof SessionId>,
+  sources: readonly HistoryTurnSource[],
+  signal: AbortSignal,
+  cwdOf: (primary: SessionSnapshot) => string | undefined,
+) {
+  const snapshots = new Map<string, SessionSnapshot>()
+  const readSession = async (sessionId: ReturnType<typeof SessionId>): Promise<SessionSnapshot> => {
+    const existing = snapshots.get(sessionId)
+    if (existing !== undefined) return existing
+    signal.throwIfAborted()
+    const snapshot = await ctx.sessionQuery.readSession(sessionId)
+    signal.throwIfAborted()
+    snapshots.set(sessionId, snapshot)
+    return snapshot
+  }
+  const primarySessionId = SessionId(sources.at(-1)!.viaSessionId ?? sources.at(-1)!.sourceSessionId)
+  const primary = await readSession(primarySessionId)
+  const seed = await buildMergedSessionSeed(targetSessionId, sources, readSession)
+  signal.throwIfAborted()
+  const preset = resolveSessionPreset(primary.session, primary.events)
+  const cwd = cwdOf(primary)
+  return await ctx.agents.create({
+    sessionId: targetSessionId,
+    seed,
+    inheritedEventCount: SessionLogOffset(seed.length),
+    meta: {
+      ...(cwd === undefined ? {} : { cwd }),
+      parentSession: primarySessionId,
+      isSeeded: true,
+      ...(preset === undefined ? {} : { agentPreset: preset }),
+    },
+    signal,
+    setup: agentCtx => ctx.agentPresets.mount(agentCtx, preset).then(() => undefined),
+  })
+}
+
+/**
+ * Finish durable Workspace membership for a just-created child.
+ *
+ * Once creation publishes, membership completes even if the browser
+ * disconnects. If it fails, the child is disposed so the failed transaction
+ * cannot leave a hidden orphan Session behind.
+ */
+async function attachOrDispose(
+  workspace: Workspace,
+  handle: { dispose(): Promise<unknown> | unknown },
+  targetSessionId: ReturnType<typeof SessionId>,
+): Promise<void> {
+  try {
+    await workspace.attachSession(targetSessionId)
+  } catch (error: unknown) {
+    await handle.dispose()
+    throw error
+  }
+}
+
 /** Create one merged child using the final tray source as its official parent. */
 export async function createMergedSession(
   ctx: Context,
@@ -198,49 +266,13 @@ export async function createMergedSession(
   if (ctx.agents.get(targetSessionId) !== undefined) {
     throw new Error(`target session "${targetSessionId}" already exists`)
   }
-
-  const snapshots = new Map<string, Awaited<ReturnType<typeof ctx.sessionQuery.readSession>>>()
-  const readSession = async (sessionId: ReturnType<typeof SessionId>) => {
-    const existing = snapshots.get(sessionId)
-    if (existing !== undefined) return existing
-    signal.throwIfAborted()
-    const snapshot = await ctx.sessionQuery.readSession(sessionId)
-    signal.throwIfAborted()
-    snapshots.set(sessionId, snapshot)
-    return snapshot
-  }
+  const handle = await createComposedAgent(
+    ctx, targetSessionId, request.sources, signal, primary => primary.session.cwd,
+  )
   const primarySessionId = SessionId(request.sources.at(-1)!.viaSessionId ?? request.sources.at(-1)!.sourceSessionId)
-  const primary = await readSession(primarySessionId)
-  const seed = await buildMergedSessionSeed(targetSessionId, request.sources, readSession)
-  signal.throwIfAborted()
-
   const sourceWorkspace = ctx.workspaceRegistry.list()
     .find(workspace => workspace.sessionIds.includes(primarySessionId))
-  const preset = resolveSessionPreset(primary.session, primary.events)
-  const handle = await ctx.agents.create({
-    sessionId: targetSessionId,
-    seed,
-    inheritedEventCount: SessionLogOffset(seed.length),
-    meta: {
-      ...(primary.session.cwd === undefined ? {} : { cwd: primary.session.cwd }),
-      parentSession: primarySessionId,
-      isSeeded: true,
-      ...(preset === undefined ? {} : { agentPreset: preset }),
-    },
-    signal,
-    setup: agentCtx => ctx.agentPresets.mount(agentCtx, preset).then(() => undefined),
-  })
-  // Once creation publishes, finish durable Workspace membership even if the
-  // browser disconnects. If membership fails, dispose the just-created child
-  // so the failed transaction cannot leave a hidden orphan Session behind.
-  if (sourceWorkspace !== undefined) {
-    try {
-      await sourceWorkspace.attachSession(targetSessionId)
-    } catch (error: unknown) {
-      await handle.dispose()
-      throw error
-    }
-  }
+  if (sourceWorkspace !== undefined) await attachOrDispose(sourceWorkspace, handle, targetSessionId)
   return { targetSessionId }
 }
 
@@ -264,41 +296,10 @@ export async function createAnchoredSession(
   if (targetWorkspace === undefined) {
     throw new Error(`anchor workspace "${request.workspaceId}" was not found`)
   }
-
-  const snapshots = new Map<string, Awaited<ReturnType<typeof ctx.sessionQuery.readSession>>>()
-  const readSession = async (sessionId: ReturnType<typeof SessionId>) => {
-    const existing = snapshots.get(sessionId)
-    if (existing !== undefined) return existing
-    signal.throwIfAborted()
-    const snapshot = await ctx.sessionQuery.readSession(sessionId)
-    signal.throwIfAborted()
-    snapshots.set(sessionId, snapshot)
-    return snapshot
-  }
-  const primarySessionId = SessionId(request.sources.at(-1)!.viaSessionId ?? request.sources.at(-1)!.sourceSessionId)
-  const primary = await readSession(primarySessionId)
-  const seed = await buildMergedSessionSeed(targetSessionId, request.sources, readSession)
-  signal.throwIfAborted()
-  const preset = resolveSessionPreset(primary.session, primary.events)
-  const handle = await ctx.agents.create({
-    sessionId: targetSessionId,
-    seed,
-    inheritedEventCount: SessionLogOffset(seed.length),
-    meta: {
-      cwd: targetWorkspace.path,
-      parentSession: primarySessionId,
-      isSeeded: true,
-      ...(preset === undefined ? {} : { agentPreset: preset }),
-    },
-    signal,
-    setup: agentCtx => ctx.agentPresets.mount(agentCtx, preset).then(() => undefined),
-  })
-  try {
-    await targetWorkspace.attachSession(targetSessionId)
-  } catch (error: unknown) {
-    await handle.dispose()
-    throw error
-  }
+  const handle = await createComposedAgent(
+    ctx, targetSessionId, request.sources, signal, () => targetWorkspace.path,
+  )
+  await attachOrDispose(targetWorkspace, handle, targetSessionId)
   return { targetSessionId }
 }
 

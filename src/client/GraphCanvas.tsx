@@ -2,7 +2,7 @@ import {
   memo, useCallback, useEffect, useMemo, useRef, useState,
   type CSSProperties, type FocusEvent as ReactFocusEvent, type PointerEvent as ReactPointerEvent,
 } from 'react'
-import { orderedNodes } from './graph.ts'
+import { orderedNodes, paIdentityId } from './graph.ts'
 import { nodeLabelMap } from './labels.ts'
 import { localized, useLocale } from './i18n.ts'
 import type { GraphState, TurnNodeId } from './types.ts'
@@ -98,19 +98,6 @@ export interface GraphCanvasProps {
   readonly nodeColors?: ReadonlyMap<TurnNodeId, number>
 }
 
-/** Resolve an original PA and every fork copy to one presentation identity. */
-function identityRootId(state: GraphState, nodeId: TurnNodeId): TurnNodeId {
-  const visited = new Set<TurnNodeId>()
-  let cursor = nodeId
-  while (!visited.has(cursor)) {
-    visited.add(cursor)
-    const sourceId = state.nodes[cursor]?.forkSourceId
-    if (sourceId === undefined || state.nodes[sourceId] === undefined) return cursor
-    cursor = sourceId
-  }
-  return cursor
-}
-
 /**
  * Lay out the visible lineage rather than a creation-order list.
  *
@@ -130,7 +117,7 @@ function layoutTree(state: GraphState): TreeLayout {
     const node = state.nodes[nodeId]
     if (node === undefined) return 0
     measuringRows.add(nodeId)
-    const identityRoot = identityRootId(state, node.id)
+    const identityRoot = paIdentityId(state, node.id)
     const forkSource = identityRoot === node.id ? undefined : state.nodes[identityRoot]
     const row = forkSource === undefined ? (() => {
       const parentRows = [...new Set(node.parentIds)]
@@ -155,7 +142,7 @@ function layoutTree(state: GraphState): TreeLayout {
   const forksBySource = new Map<TurnNodeId, TurnNodeId[]>()
   for (const node of nodes) {
     if (node.forkSourceId === undefined) continue
-    const identityRoot = identityRootId(state, node.id)
+    const identityRoot = paIdentityId(state, node.id)
     if (identityRoot === node.id || state.nodes[identityRoot] === undefined) continue
     forksBySource.set(identityRoot, [...(forksBySource.get(identityRoot) ?? []), node.id])
   }
@@ -198,7 +185,7 @@ function layoutTree(state: GraphState): TreeLayout {
     measuringLanes.add(nodeId)
 
     let lane: number
-    const identityRoot = identityRootId(state, node.id)
+    const identityRoot = paIdentityId(state, node.id)
     const forkSource = identityRoot === node.id ? undefined : state.nodes[identityRoot]
     const parents = [...new Set(node.parentIds)]
       .filter(parentId => parentId !== nodeId && state.nodes[parentId] !== undefined)
@@ -347,15 +334,15 @@ function GraphCanvasView({
     if (preview === undefined) return null
     const identityRoots = new Set([preview.id, ...preview.contextManifest]
       .filter(nodeId => state.nodes[nodeId] !== undefined)
-      .map(nodeId => identityRootId(state, nodeId)))
+      .map(nodeId => paIdentityId(state, nodeId)))
     return new Set(nodes
-      .filter(node => identityRoots.has(identityRootId(state, node.id)))
+      .filter(node => identityRoots.has(paIdentityId(state, node.id)))
       .map(node => node.id))
   }, [state, nodes, previewNodeId])
   const forkIdentityGroups = useMemo(() => {
     const groups = new Map<TurnNodeId, TurnNodeId[]>()
     for (const node of nodes) {
-      const identityRoot = identityRootId(state, node.id)
+      const identityRoot = paIdentityId(state, node.id)
       if (node.forkSourceId === undefined && identityRoot === node.id) {
         if (!groups.has(identityRoot)) groups.set(identityRoot, [identityRoot])
         continue
@@ -615,7 +602,7 @@ function GraphCanvasView({
         const node = state.nodes[position.nodeId]
         if (node === undefined) return null
         const label = labels.get(node.id) ?? 'PA'
-        const identityRoot = identityRootId(state, node.id)
+        const identityRoot = paIdentityId(state, node.id)
         const visibleLabel = node.forkSourceId === undefined
           ? label
           : labels.get(identityRoot) ?? label.replace(/(?:\s+fork)+$/i, '')
